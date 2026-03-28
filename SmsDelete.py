@@ -1,27 +1,26 @@
 from heroku.utils import admin_cmd
 import asyncio
 
-# Основная функция для -смс
-async def sms_run(event):
+# Логика удаления через -смс
+async def sms_del(event):
+    # Саму команду -смс удаляем сразу
+    await event.delete()
+    
     args = event.pattern_match.group(1)
     
     if event.is_reply:
-        # Если ответил на сообщение — сносим его и твою команду
+        # Если ответил на сообщение - удаляем то, на что ответил
         reply = await event.get_reply_message()
-        await asyncio.gather(reply.delete(), event.delete())
+        await reply.delete()
     elif args and args.isdigit():
-        # Если написал "-смс 5" — сносим 5 сообщений
+        # Если написал число (напр. -смс 5) - чистим последние сообщения
         count = int(args)
-        await event.delete()
         async for msg in event.client.iter_messages(event.chat_id, limit=count):
             await msg.delete()
-    else:
-        # Если просто "-смс" без ничего — удаляем только саму команду
-        await event.delete()
 
-# Регистрация, чтобы Heroku не плевался ошибками
+# РЕГИСТРАЦИЯ КОМАНДЫ (БЕЗ ЭТОГО БУДЕТ ОШИБКА В ЛОГАХ)
 def register(cb):
-    # Реагирует и на русский, и на английский вариант
-    cb.add_handler(admin_cmd(pattern=r"(?:-смс|-sms)(?: |$)(.*)")(sms_run))
+    # Теперь бот будет реагировать на -смс
+    cb.add_handler(admin_cmd(pattern=r"-смс(?: |$)(.*)")(sms_del))
 
-__doc__ = "Удаление сообщений через -смс"
+__doc__ = "Удаление через -смс (репли или число)"
