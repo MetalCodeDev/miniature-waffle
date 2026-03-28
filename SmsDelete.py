@@ -1,31 +1,24 @@
+from heroku.utils import admin_cmd
 import asyncio
 
-# Логика команды -смс
-async def sms_handler(event):
-    # Сразу удаляем сообщение с командой -смс
-    await event.delete()
+# Функция удаления
+async def sms_del(event):
+    await event.delete() # Удаляем саму команду -смс
     
-    # Если это ответ на сообщение (репли)
+    args = event.pattern_match.group(1)
+    
     if event.is_reply:
+        # Если есть репли — удаляем то сообщение
         reply = await event.get_reply_message()
         await reply.delete()
-    
-    # Если написали число, например "-смс 5"
-    else:
-        try:
-            # Вытаскиваем текст после -смс
-            input_str = event.text.split(maxsplit=1)[1]
-            count = int(input_str)
-            async for msg in event.client.iter_messages(event.chat_id, limit=count):
-                await msg.delete()
-        except (IndexError, ValueError):
-            # Если чисел нет, ничего больше не делаем
-            pass
+    elif args and args.isdigit():
+        # Если число — чистим историю
+        count = int(args)
+        async for msg in event.client.iter_messages(event.chat_id, limit=count):
+            await msg.delete()
 
-# ТА САМАЯ ФУНКЦИЯ, КОТОРУЮ ТРЕБУЕТ ТВОЙ БОТ В ЛОГАХ
-def register(cb):
-    # Регистрируем функцию на текст, начинающийся с -смс
-    from telethon import events
-    cb.add_handler(sms_handler, events.NewMessage(pattern=r"^-смс(?: |$)(.*)", outgoing=True))
+# Исправленная регистрация под твой лог
+def register(module_name):
+    bot.add_handler(admin_cmd(pattern=r"-смс(?: |$)(.*)")(sms_del))
 
 __doc__ = "Удаление через -смс"
