@@ -1,10 +1,12 @@
+# meta developer: @MetalCodeDev
 import requests
 from bs4 import BeautifulSoup
-from .. import loader, utils # Стандарт для Hikka/FTG
+import random
+from .. import loader, utils
 
 @loader.tds
-class ComixSearchMod(loader.Module):
-    """Поиск по команде .sk с кнопками"""
+class SexKomixMod(loader.Module):
+    """Модуль для поиска комиксов (18+) с навигацией кнопками"""
     strings = {"name": "ComixHub"}
 
     async def skcmd(self, message):
@@ -13,41 +15,50 @@ class ComixSearchMod(loader.Module):
         query = args[0] if args else ""
         page = int(args[1]) if len(args) > 1 and args[1].isdigit() else 1
         
-        await self.fetch_and_send(message, query, page)
+        if not query:
+            return await utils.answer(message, "❌ Введи поисковый запрос, например: `.sk мамочка`")
 
-    async def fetch_and_send(self, message, query, page):
+        await self.search_logic(message, query, page)
+
+    async def search_logic(self, message, query, page):
+        # Формируем URL точно под твой сайт
         url = f"https://top.sexkomix22.com/home/?only={query}&sort=date&page={page}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=15)
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Ищем карточки комиксов
-            items = soup.find_all('div', class_='short-item') 
+            # Селекторы для карточек на этом сайте
+            items = soup.find_all('div', class_='short-item')
             if not items:
-                return await utils.answer(message, f"Ничего не нашлось на стр. {page}")
+                return await utils.answer(message, f"Ничего не найдено на стр. {page}")
 
-            res_text = [f"🔍 **Результаты по запросу:** `{query}` (Стр. {page})\n"]
-            for item in items[:8]:
-                title = item.find('div', class_='short-title').get_text(strip=True)
+            out = f"📂 **Результаты:** `{query}`\n📄 **Страница:** {page}\n\n"
+            for item in items[:6]:
+                title = item.find('div', class_='short-title').text.strip()
                 link = item.find('a')['href']
-                res_text.append(f"🔹 [{title}]({link})")
+                out += f"• [{title}]({link})\n"
 
-            text = "\n".join(res_text)
-            
-            # Кнопки навигации
+            # Кнопки управления
             buttons = [
                 [
-                    {"text": "⬅️ Назад", "callback": self.nav, "args": (query, max(1, page-1))},
-                    {"text": "Вперед ➡️", "callback": self.nav, "args": (query, page+1)}
+                    {"text": "⬅️ Назад", "callback": self.nav_inline, "args": (query, max(1, page-1))},
+                    {"text": "Вперед ➡️", "callback": self.nav_inline, "args": (query, page+1)}
                 ],
-                [{"text": "🎲 Рандом", "callback": self.nav, "args": (query, __import__('random').randint(1, 100))}]
+                [{"text": "🎲 Рандом", "callback": self.nav_inline, "args": (query, random.randint(1, 100))}]
             ]
 
-            await self.inline.form(text=text, message=message, buttons=buttons)
+            # Отправляем инлайн-форму (кнопки)
+            await self.inline.form(text=out, message=message, buttons=buttons)
+            
         except Exception as e:
-            await utils.answer(message, f"Ошибка: {e}")
+            await utils.answer(message, f"🛑 Ошибка парсинга: {str(e)}")
 
-    async def nav(self, call, query, page):
-        await self.fetch_and_send(call.message, query, page)
+    async def nav_inline(self, call, query, page):
+        """Хендлер для нажатия кнопок"""
+        await self.search_logic(call.message, query, page)
+
+    def register(self, client):
+        # Этот метод нужен для корректной инициализации в heroku/loader.py
+        pass
