@@ -1,59 +1,49 @@
-"""
-Управление сообщениями.
-.del [число] - Удалить сообщение (по реплаю или последние N)
-.purge [число] - Массовая очистка чата
-"""
-
 from telethon import events
+from heroku.utils import admin_cmd # Импорт специфического декоратора этого бота
 import asyncio
 
-# Стандартный блок инфо для .help (если твой бот его юзает)
-__doc__ = "Модуль для удаления сообщений. Работает как через репли, так и по числу."
-
-@events.register(events.NewMessage(pattern=r"\.del(?:\s+(\d+))?", outgoing=True))
+@bot.on(admin_cmd(pattern="del(?: |$)(.*)"))
 async def delete_handler(event):
-    """Удаляет сообщения. Если есть репли — удаляет его. Если есть число — удаляет N сообщений."""
+    """Удаляет сообщения: по реплаю или указанное количество."""
     args = event.pattern_match.group(1)
     
-    # Сценарий 1: Есть репли (удаляем то, на что ответили, и саму команду)
     if event.is_reply:
+        # Если есть репли, удаляем и его, и саму команду
         reply_msg = await event.get_reply_message()
         await asyncio.gather(reply_msg.delete(), event.delete())
-        return
-
-    # Сценарий 2: Репла нет, но есть число (удаляем N последних сообщений)
-    if args:
+    elif args and args.isdigit():
+        # Если указано число, удаляем N последних сообщений
         count = int(args)
-        await event.delete() # Удаляем саму команду .del
+        await event.delete()
         async for msg in event.client.iter_messages(event.chat_id, limit=count):
             await msg.delete()
-        return
-
-    # Сценарий 3: Нет ни репла, ни числа — просто удаляем саму команду (или последнее сообщение)
-    await event.delete()
-
-@events.register(events.NewMessage(pattern=r"\.purge(?:\s+(\d+))?", outgoing=True))
-async def purge_handler(event):
-    """Массовая очистка. .purge [число]"""
-    input_str = event.pattern_match.group(1)
-    
-    if not input_str:
-        await event.edit("<code>Укажите количество сообщений: .purge 10</code>", parse_mode='html')
-        await asyncio.sleep(2)
+    else:
+        # Если просто .del без реплая и аргументов — удаляем только саму команду
         await event.delete()
+
+@bot.on(admin_cmd(pattern="purge(?: |$)(.*)"))
+async def purge_handler(event):
+    """Массовая очистка чата через .purge [число]."""
+    args = event.pattern_match.group(1)
+    if not args or not args.isdigit():
+        await event.edit("<code>Укажите количество сообщений для очистки!</code>")
         return
 
-    count = int(input_str)
+    count = int(args)
     await event.delete()
     
-    # Удаляем пачкой (так быстрее и меньше шансов на FloodWait в Heroku)
+    # Удаляем сообщения пачками по 100 (для обхода лимитов Telegram)
     messages = []
     async for msg in event.client.iter_messages(event.chat_id, limit=count):
         messages.append(msg)
-        if len(messages) >= 100: # Лимит для одного запроса на удаление
+        if len(messages) >= 100:
             await event.client.delete_messages(event.chat_id, messages)
             messages = []
     
     if messages:
         await event.client.delete_messages(event.chat_id, messages)
+
+# Описание для команды .help внутри бота
+__doc__ = "<b>Модуль SmsDelete</b>\n\n<b>Команды:</b>\n• <code>.del</code> — Удалить (репли или число)\n• <code>.purge</code> — Очистить чат"
+
 
