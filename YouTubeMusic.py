@@ -1,18 +1,23 @@
 # meta developer: @PlayBoyCart4
 # scope: heroku_only
-# requires: yt-dlp
+# requires: yt-dlp, spotipy, pillow, requests
 
 import asyncio
 import os
 import tempfile
+import logging
+import io
 from pathlib import Path
+from datetime import datetime
 
 from .. import loader, utils
+
+logger = logging.getLogger(__name__)
 
 
 @loader.tds
 class YouTubeMusicMod(loader.Module):
-    """YouTube / YouTube Music audio downloader."""
+    """YouTube / YouTube Music audio downloader with now playing support."""
 
     strings = {
         "name": "YouTubeMusic",
@@ -22,7 +27,129 @@ class YouTubeMusicMod(loader.Module):
         "added": "➕ <b>Трек добавлен.</b>",
         "no_query": "❌ <b>Укажи название трека или ссылку.</b>",
         "error": "❌ <b>Ошибка:</b>\n<code>{}</code>",
+        "now_playing": "🎵 <b>Слушаю сейчас:</b>\n<b>{artist}</b>\n<code>{title}</code>\n⏱️ <code>{progress}/{duration}</code>",
+        "not_playing": "⏸️ <b>Сейчас ничего не слушаю.</b>",
+        "spotify_error": "❌ <b>Ошибка Spotify:</b>\n<code>{}</code>",
     }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.spotify_client = None
+
+    async def client_ready(self, client, db):
+        """Инициализация при запуске."""
+        await self._init_spotify()
+
+    async def _init_spotify(self):
+        """Инициализировать Spotify клиент."""
+        try:
+            import spotipy
+            from spotipy.oauth2 import SpotifyOAuth
+        except ImportError:
+            logger.warning("spotipy не установлен. Команда .whoami будет недоступна.")
+            return
+
+        try:
+            sp_oauth = SpotifyOAuth(
+                client_id=os.getenv("SPOTIPY_CLIENT_ID"),
+                client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
+                redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI", "http://localhost:8888/callback"),
+                scope="user-read-currently-playing"
+            )
+            self.spotify_client = spotipy.Spotify(auth_manager=sp_oauth)
+            logger.info("Spotify клиент инициализирован успешно")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации Spotify: {e}")
+            self.spotify_client = None
+
+    def _format_duration(self, ms: int) -> str:
+        """Преобразовать миллисекунды в mm:ss."""
+        total_seconds = ms // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}:{seconds:02d}"
+
+    async def _download_image(self, url: str) -> bytes:
+        """Загрузить изображение с URL."""
+        try:
+            import requests
+            response = await asyncio.to_thread(
+                lambda: requests.get(url, timeout=10)
+            )
+            response.raise_for_status()
+            return response.content
+        except Exception as e:
+            logger.error(f"Ошибка загрузки изображения: {e}")
+            return None
+
+    async def _create_now_playing_image(self, now_playing: dict) -> bytes:
+        """Создать изображение с информацией о текущем треке."""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            logger.warning("Pillow не установлен")
+            return None
+
+        try:
+            # Загруженить обложку
+            cover_data = None
+            if now_playing.get("cover_url"):
+                cover_data = await self._download_image(now_playing["cover_url"])
+
+            # Если нет обложки, создаем пустой фон
+            if cover_data:
+                cover_image = Image.open(io.BytesIO(cover_data)).convert("RGB")
+                # Оптимизируем размер
+                cover_image.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                width, height = cover_image.size
+            else:
+                width, height = 400, 400
+                cover_image = Image.new("RGB", (width, height), color=(30, 30, 30))
+
+            # Создаем финальное изображение с информацией
+            final_height = height + 180
+            final_image = Image.new("RGB", (width, final_height), color=(20, 20, 20))
+
+            # Вставляем обложку
+            final_image.paste(cover_image, (0, 0))
+
+            # Добавляем текст
+            draw = ImageDraw.Draw(final_image)
+
+            try:
+                font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+                font_artist = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+                font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+            except:
+                font_title = ImageFont.load_default()
+                font_artist = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+
+            y_offset = height + 10
+
+            # Артист
+            artist_text = now_playing.get("artist", "Unknown")[:50]
+            draw.text((10, y_offset), artist_text, fill=(100, 200, 255), font=font_artist)
+
+            # Трек
+            title_text = now_playing.get("title", "Unknown")[:40]
+            draw.text((10, y_offset + 25), title_text, fill=(255, 255, 255), font=font_title)
+
+            # Время
+            progress_str = self._format_duration(now_playing.get("progress", 0))
+            duration_str = self._format_duration(now_playing.get("duration", 0))
+            time_text = f"{progress_str} / {duration_str}"
+            draw.text((10, y_offset + 50), time_text, fill=(150, 150, 150), font=font_small)
+
+            # Сохраняем в памяти
+            buffer = io.BytesIO()
+            final_image.save(buffer, format="PNG")
+            buffer.seek(0)
+            return buffer.getvalue()
+
+        except Exception as e:
+            logger.error(f"Ошибка создания изображения: {e}")
+            return None
 
     async def _download(self, query: str, directory: str):
         """Загрузить аудиофайл с YouTube."""
@@ -51,27 +178,46 @@ class YouTubeMusicMod(loader.Module):
 
         def download():
             with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(
-                    query,
-                    download=True,
-                )
-
-                if info and "entries" in info:
-                    info = next(
-                        (item for item in info["entries"] if item),
-                        None,
+                try:
+                    logger.debug(f"Начинаю загрузку: {query}")
+                    info = ydl.extract_info(
+                        query,
+                        download=True,
                     )
 
-                if not info:
-                    raise RuntimeError(
-                        "Не удалось найти трек."
-                    )
+                    if info and "entries" in info:
+                        info = next(
+                            (item for item in info["entries"] if item),
+                            None,
+                        )
 
-                return ydl.prepare_filename(info)
+                    if not info:
+                        raise RuntimeError(
+                            "Не удалось найти трек."
+                        )
 
-        filepath = await asyncio.to_thread(download)
+                    return ydl.prepare_filename(info)
+                except Exception as e:
+                    logger.error(f"Ошибка yt-dlp: {e}")
+                    raise RuntimeError(f"Ошибка загрузки: {e}") from e
+
+        try:
+            filepath = await asyncio.wait_for(
+                asyncio.to_thread(download),
+                timeout=300
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("Загрузка заняла слишком много времени (>5 мин)")
 
         if os.path.isfile(filepath):
+            # Проверка размера файла
+            max_size_mb = 50
+            file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            if file_size_mb > max_size_mb:
+                os.remove(filepath)
+                raise RuntimeError(
+                    f"Файл слишком большой ({file_size_mb:.1f}MB > {max_size_mb}MB)"
+                )
             return filepath
 
         # Резервный поиск файла (на случай если путь не совпадает)
@@ -103,6 +249,13 @@ class YouTubeMusicMod(loader.Module):
             caption: Подпись для отправляемого файла
             show_download_status: Показывать ли промежуточный статус "Скачиваю"
         """
+        if not query or not query.strip():
+            await utils.answer(
+                message,
+                self.strings["no_query"],
+            )
+            return
+
         status = await utils.answer(
             message,
             self.strings["search"].format(
@@ -137,12 +290,104 @@ class YouTubeMusicMod(loader.Module):
                 await status.delete()
 
             except Exception as error:
+                logger.error(f"Ошибка при обработке загрузки: {error}")
                 await utils.answer(
                     status,
                     self.strings["error"].format(
                         utils.escape_html(str(error))
                     ),
                 )
+
+    async def _get_now_playing_spotify(self):
+        """Получить текущий трек из Spotify."""
+        if not self.spotify_client:
+            return None
+
+        try:
+            result = await asyncio.to_thread(
+                self.spotify_client.current_user_currently_playing
+            )
+
+            if not result or not result.get("item"):
+                return None
+
+            item = result["item"]
+            
+            # Получаем обложку
+            cover_url = None
+            if item.get("album", {}).get("images"):
+                cover_url = item["album"]["images"][0]["url"]
+
+            return {
+                "title": item.get("name", "Unknown"),
+                "artist": ", ".join([artist["name"] for artist in item.get("artists", [])]),
+                "progress": item.get("progress_ms", 0),
+                "duration": item.get("duration_ms", 0),
+                "is_playing": result.get("is_playing", False),
+                "cover_url": cover_url,
+            }
+        except Exception as e:
+            logger.error(f"Ошибка Spotify API: {e}")
+            return None
+
+    @loader.command(
+        ru_doc="Показать текущий трек: .whoami"
+    )
+    async def whoamicmd(self, message):
+        """Show what you're currently listening to on Spotify."""
+        
+        status = await utils.answer(
+            message,
+            "⏳ <b>Проверяю...</b>"
+        )
+
+        try:
+            now_playing = await self._get_now_playing_spotify()
+
+            if not now_playing:
+                await utils.answer(
+                    status,
+                    self.strings["not_playing"],
+                )
+                return
+
+            # Создаем красивое изображение
+            image_data = await self._create_now_playing_image(now_playing)
+
+            if image_data:
+                await message.client.send_file(
+                    message.chat_id,
+                    image_data,
+                    caption="🎵 Слушаю сейчас",
+                )
+                await status.delete()
+            else:
+                # Если не удалось создать изображение, отправляем текст
+                progress_str = self._format_duration(now_playing["progress"])
+                duration_str = self._format_duration(now_playing["duration"])
+
+                text = self.strings["now_playing"].format(
+                    artist=utils.escape_html(now_playing["artist"]),
+                    title=utils.escape_html(now_playing["title"]),
+                    progress=progress_str,
+                    duration=duration_str,
+                )
+
+                status_icon = "▶️" if now_playing["is_playing"] else "⏸️"
+                
+                await utils.answer(
+                    status,
+                    f"{status_icon} {text}"
+                )
+
+        except Exception as error:
+            logger.error(f"Ошибка whoami: {error}")
+            await utils.answer(
+                status,
+                self.strings["spotify_error"].format(
+                    utils.escape_html(str(error))
+                ),
+            )
 
     @loader.command(
         ru_doc="Скачать трек: .yt <название или ссылка>"
