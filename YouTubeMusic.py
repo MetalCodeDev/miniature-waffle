@@ -25,6 +25,7 @@ class YouTubeMusicMod(loader.Module):
     }
 
     async def _download(self, query: str, directory: str):
+        """Загрузить аудиофайл с YouTube."""
         try:
             import yt_dlp
         except ImportError as error:
@@ -73,11 +74,12 @@ class YouTubeMusicMod(loader.Module):
         if os.path.isfile(filepath):
             return filepath
 
-        files = [
-            path
-            for path in Path(directory).iterdir()
-            if path.is_file()
-        ]
+        # Резервный поиск файла (на случай если путь не совпадает)
+        files = sorted(
+            (path for path in Path(directory).iterdir() if path.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
 
         if not files:
             raise RuntimeError(
@@ -85,6 +87,62 @@ class YouTubeMusicMod(loader.Module):
             )
 
         return str(files[0])
+
+    async def _process_download(
+        self,
+        message,
+        query: str,
+        caption: str,
+        show_download_status: bool = True,
+    ):
+        """Общий метод для обработки загрузки и отправки файла.
+        
+        Args:
+            message: Сообщение от пользователя
+            query: Запрос (название или ссылка)
+            caption: Подпись для отправляемого файла
+            show_download_status: Показывать ли промежуточный статус "Скачиваю"
+        """
+        status = await utils.answer(
+            message,
+            self.strings["search"].format(
+                utils.escape_html(query)
+            ),
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="heroku_yt_"
+        ) as temp:
+
+            try:
+                if show_download_status:
+                    await utils.answer(
+                        status,
+                        self.strings["download"].format(
+                            utils.escape_html(query)
+                        ),
+                    )
+
+                filepath = await self._download(
+                    query,
+                    temp,
+                )
+
+                await message.client.send_file(
+                    message.chat_id,
+                    filepath,
+                    caption=caption,
+                )
+
+                await status.delete()
+
+            except Exception as error:
+                await utils.answer(
+                    status,
+                    self.strings["error"].format(
+                        utils.escape_html(str(error))
+                    ),
+                )
 
     @loader.command(
         ru_doc="Скачать трек: .yt <название или ссылка>"
@@ -101,45 +159,12 @@ class YouTubeMusicMod(loader.Module):
             )
             return
 
-        status = await utils.answer(
+        await self._process_download(
             message,
-            self.strings["search"].format(
-                utils.escape_html(query)
-            ),
+            query,
+            self.strings["done"],
+            show_download_status=True,
         )
-
-        with tempfile.TemporaryDirectory(
-            prefix="heroku_yt_"
-        ) as temp:
-
-            try:
-                await utils.answer(
-                    status,
-                    self.strings["download"].format(
-                        utils.escape_html(query)
-                    ),
-                )
-
-                filepath = await self._download(
-                    query,
-                    temp,
-                )
-
-                await message.client.send_file(
-                    message.chat_id,
-                    filepath,
-                    caption=self.strings["done"],
-                )
-
-                await status.delete()
-
-            except Exception as error:
-                await utils.answer(
-                    status,
-                    self.strings["error"].format(
-                        utils.escape_html(str(error))
-                    ),
-                )
 
     @loader.command(
         ru_doc="Скачать трек: .ytadd <название или ссылка>"
@@ -149,14 +174,11 @@ class YouTubeMusicMod(loader.Module):
 
         query = utils.get_args_raw(message).strip()
 
+        # Если нет аргументов, пытаемся получить текст из ответа
         if not query:
             reply = await message.get_reply_message()
 
-            if reply and getattr(
-                reply,
-                "message",
-                None,
-            ):
+            if reply and reply.message:
                 query = reply.message.strip()
 
         if not query:
@@ -166,35 +188,9 @@ class YouTubeMusicMod(loader.Module):
             )
             return
 
-        status = await utils.answer(
+        await self._process_download(
             message,
-            self.strings["search"].format(
-                utils.escape_html(query)
-            ),
+            query,
+            self.strings["added"],
+            show_download_status=True,
         )
-
-        with tempfile.TemporaryDirectory(
-            prefix="heroku_yt_"
-        ) as temp:
-
-            try:
-                filepath = await self._download(
-                    query,
-                    temp,
-                )
-
-                await message.client.send_file(
-                    message.chat_id,
-                    filepath,
-                    caption=self.strings["added"],
-                )
-
-                await status.delete()
-
-            except Exception as error:
-                await utils.answer(
-                    status,
-                    self.strings["error"].format(
-                        utils.escape_html(str(error))
-                    ),
-                )
