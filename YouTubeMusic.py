@@ -1,12 +1,13 @@
 # meta developer: @PlayBoyCart4
 # scope: heroku_only
-# requires: yt-dlp, spotipy, pillow, requests
+# requires: yt-dlp, ytmusicapi, pillow, requests
 
 import asyncio
 import os
 import tempfile
 import logging
 import io
+import json
 from pathlib import Path
 from datetime import datetime
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @loader.tds
 class YouTubeMusicMod(loader.Module):
-    """YouTube / YouTube Music audio downloader with now playing support."""
+    """YouTube Music audio downloader with now playing support."""
 
     strings = {
         "name": "YouTubeMusic",
@@ -28,46 +29,50 @@ class YouTubeMusicMod(loader.Module):
         "no_query": "❌ <b>Укажи название трека или ссылку.</b>",
         "error": "❌ <b>Ошибка:</b>\n<code>{}</code>",
         "now_playing": "🎵 <b>Слушаю сейчас:</b>\n<b>{artist}</b>\n<code>{title}</code>\n⏱️ <code>{progress}/{duration}</code>",
-        "not_playing": "⏸️ <b>Сейчас ничего не слушаю.</b>",
-        "spotify_error": "❌ <b>Ошибка Spotify:</b>\n<code>{}</code>",
+        "not_playing": "⏸️ <b>Сейчас ничего не слушаю или история пуста.</b>",
+        "yt_music_error": "❌ <b>Ошибка YouTube Music:</b>\n<code>{}</code>",
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.spotify_client = None
+        self.ytmusic_client = None
 
     async def client_ready(self, client, db):
         """Инициализация при запуске."""
-        await self._init_spotify()
+        await self._init_ytmusic()
 
-    async def _init_spotify(self):
-        """Инициализировать Spotify клиент."""
+    async def _init_ytmusic(self):
+        """Инициализировать YouTube Music клиент."""
         try:
-            import spotipy
-            from spotipy.oauth2 import SpotifyOAuth
+            from ytmusicapi import YTMusic
         except ImportError:
-            logger.warning("spotipy не установлен. Команда .whoami будет недоступна.")
+            logger.warning("ytmusicapi не установлен. Команда .whoami будет недоступна.")
             return
 
         try:
-            sp_oauth = SpotifyOAuth(
-                client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-                client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-                redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI", "http://localhost:8888/callback"),
-                scope="user-read-currently-playing"
-            )
-            self.spotify_client = spotipy.Spotify(auth_manager=sp_oauth)
-            logger.info("Spotify клиент инициализирован успешно")
+            # Попытка загрузить сохраненные headers/auth данные
+            auth_file = os.getenv("YTMUSIC_AUTH_FILE", "ytmusic_auth.json")
+            
+            if os.path.exists(auth_file):
+                self.ytmusic_client = YTMusic(auth_file)
+                logger.info("YouTube Music клиент инициализирован с сохраненной авторизацией")
+            else:
+                # Если нет файла авторизации, пытаемся создать без авторизации (ограничено)
+                self.ytmusic_client = YTMusic()
+                logger.info("YouTube Music клиент инициализирован без авторизации")
         except Exception as e:
-            logger.error(f"Ошибка инициализации Spotify: {e}")
-            self.spotify_client = None
+            logger.error(f"Ошибка инициализации YouTube Music: {e}")
+            self.ytmusic_client = None
 
     def _format_duration(self, ms: int) -> str:
         """Преобразовать миллисекунды в mm:ss."""
-        total_seconds = ms // 1000
-        minutes = total_seconds // 60
-        seconds = total_seconds % 60
-        return f"{minutes}:{seconds:02d}"
+        try:
+            total_seconds = int(ms) // 1000
+            minutes = total_seconds // 60
+            seconds = total_seconds % 60
+            return f"{minutes}:{seconds:02d}"
+        except:
+            return "0:00"
 
     async def _download_image(self, url: str) -> bytes:
         """Загрузить изображение с URL."""
@@ -91,10 +96,10 @@ class YouTubeMusicMod(loader.Module):
             return None
 
         try:
-            # Загруженить обложку
+            # Загружаем обложку
             cover_data = None
-            if now_playing.get("cover_url"):
-                cover_data = await self._download_image(now_playing["cover_url"])
+            if now_playing.get("thumbnail"):
+                cover_data = await self._download_image(now_playing["thumbnail"])
 
             # Если нет обложки, создаем пустой фон
             if cover_data:
@@ -136,9 +141,8 @@ class YouTubeMusicMod(loader.Module):
             draw.text((10, y_offset + 25), title_text, fill=(255, 255, 255), font=font_title)
 
             # Время
-            progress_str = self._format_duration(now_playing.get("progress", 0))
-            duration_str = self._format_duration(now_playing.get("duration", 0))
-            time_text = f"{progress_str} / {duration_str}"
+            progress_str = self._format_duration(now_playing.get("duration", 0))
+            time_text = f"🎵 YouTube Music"
             draw.text((10, y_offset + 50), time_text, fill=(150, 150, 150), font=font_small)
 
             # Сохраняем в памяти
@@ -298,51 +302,47 @@ class YouTubeMusicMod(loader.Module):
                     ),
                 )
 
-    async def _get_now_playing_spotify(self):
-        """Получить текущий трек из Spotify."""
-        if not self.spotify_client:
+    async def _get_now_playing_youtube_music(self):
+        """Получить текущий/последний трек из YouTube Music."""
+        if not self.ytmusic_client:
             return None
 
         try:
-            result = await asyncio.to_thread(
-                self.spotify_client.current_user_currently_playing
+            # Получаем историю прослушивания (последние треки)
+            history = await asyncio.to_thread(
+                self.ytmusic_client.get_history
             )
 
-            if not result or not result.get("item"):
+            if not history or len(history) == 0:
                 return None
 
-            item = result["item"]
-            
-            # Получаем обложку
-            cover_url = None
-            if item.get("album", {}).get("images"):
-                cover_url = item["album"]["images"][0]["url"]
+            # Берем первый (последний проигранный) трек
+            track = history[0]
 
             return {
-                "title": item.get("name", "Unknown"),
-                "artist": ", ".join([artist["name"] for artist in item.get("artists", [])]),
-                "progress": item.get("progress_ms", 0),
-                "duration": item.get("duration_ms", 0),
-                "is_playing": result.get("is_playing", False),
-                "cover_url": cover_url,
+                "title": track.get("title", "Unknown"),
+                "artist": track.get("artists", [{"name": "Unknown"}])[0].get("name", "Unknown") if track.get("artists") else "Unknown",
+                "duration": track.get("duration_seconds", 0),
+                "thumbnail": track.get("thumbnail", [{"url": None}])[0].get("url") if track.get("thumbnail") else None,
+                "is_playing": True,  # YouTube Music API не показывает статус, предполагаем играет
             }
         except Exception as e:
-            logger.error(f"Ошибка Spotify API: {e}")
+            logger.error(f"Ошибка YouTube Music API: {e}")
             return None
 
     @loader.command(
-        ru_doc="Показать текущий трек: .whoami"
+        ru_doc="Показать последний трек: .whoami"
     )
     async def whoamicmd(self, message):
-        """Show what you're currently listening to on Spotify."""
+        """Show what you recently listened to on YouTube Music."""
         
         status = await utils.answer(
             message,
-            "⏳ <b>Проверяю...</b>"
+            "⏳ <b>Проверяю YouTube Music...</b>"
         )
 
         try:
-            now_playing = await self._get_now_playing_spotify()
+            now_playing = await self._get_now_playing_youtube_music()
 
             if not now_playing:
                 await utils.answer(
@@ -358,33 +358,30 @@ class YouTubeMusicMod(loader.Module):
                 await message.client.send_file(
                     message.chat_id,
                     image_data,
-                    caption="🎵 Слушаю сейчас",
+                    caption="🎵 Последний трек",
                 )
                 await status.delete()
             else:
                 # Если не удалось создать изображение, отправляем текст
-                progress_str = self._format_duration(now_playing["progress"])
                 duration_str = self._format_duration(now_playing["duration"])
 
                 text = self.strings["now_playing"].format(
                     artist=utils.escape_html(now_playing["artist"]),
                     title=utils.escape_html(now_playing["title"]),
-                    progress=progress_str,
+                    progress=duration_str,
                     duration=duration_str,
                 )
 
-                status_icon = "▶️" if now_playing["is_playing"] else "⏸️"
-                
                 await utils.answer(
                     status,
-                    f"{status_icon} {text}"
+                    f"🎵 {text}"
                 )
 
         except Exception as error:
             logger.error(f"Ошибка whoami: {error}")
             await utils.answer(
                 status,
-                self.strings["spotify_error"].format(
+                self.strings["yt_music_error"].format(
                     utils.escape_html(str(error))
                 ),
             )
