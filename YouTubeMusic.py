@@ -1,10 +1,9 @@
-# meta developer: @MAXC
+# meta developer: @PlayBoyCart4
 # scope: heroku_only
 # requires: yt-dlp
 
 import asyncio
 import os
-import re
 import tempfile
 from pathlib import Path
 
@@ -13,86 +12,79 @@ from .. import loader, utils
 
 @loader.tds
 class YouTubeMusicMod(loader.Module):
-    """YouTube / YouTube Music downloader."""
+    """YouTube / YouTube Music audio downloader."""
 
     strings = {
         "name": "YouTubeMusic",
         "search": "🔎 <b>Ищу:</b> <code>{}</code>",
         "download": "⬇️ <b>Скачиваю:</b> <code>{}</code>",
         "done": "🎵 <b>Готово.</b>",
+        "added": "➕ <b>Трек добавлен.</b>",
         "no_query": "❌ <b>Укажи название трека или ссылку.</b>",
         "error": "❌ <b>Ошибка:</b>\n<code>{}</code>",
     }
 
     async def _download(self, query: str, directory: str):
-        output = os.path.join(
-            directory,
-            "%(title).120s.%(ext)s"
+        try:
+            import yt_dlp
+        except ImportError as error:
+            raise RuntimeError(
+                "Не установлен yt-dlp. Перезагрузи модуль после установки зависимости."
+            ) from error
+
+        output = str(
+            Path(directory) / "%(title).120s.%(ext)s"
         )
 
-        command = [
-            "yt-dlp",
-            "--no-playlist",
-            "--no-warnings",
-            "--restrict-filenames",
-            "-f",
-            "bestaudio[ext=m4a]/bestaudio",
-            "-o",
-            output,
-            "--print",
-            "after_move:filepath",
+        options = {
+            "format": "bestaudio[ext=m4a]/bestaudio",
+            "outtmpl": output,
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "restrictfilenames": True,
+        }
+
+        if not query.startswith(("http://", "https://")):
+            query = f"ytsearch1:{query}"
+
+        def download():
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(
+                    query,
+                    download=True,
+                )
+
+                if info and "entries" in info:
+                    info = next(
+                        (item for item in info["entries"] if item),
+                        None,
+                    )
+
+                if not info:
+                    raise RuntimeError(
+                        "Не удалось найти трек."
+                    )
+
+                return ydl.prepare_filename(info)
+
+        filepath = await asyncio.to_thread(download)
+
+        if os.path.isfile(filepath):
+            return filepath
+
+        files = [
+            path
+            for path in Path(directory).iterdir()
+            if path.is_file()
         ]
 
-        if re.match(r"^https?://", query):
-            command.append(query)
-        else:
-            command.extend([
-                "ytsearch1:" + query
-            ])
-
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await process.communicate()
-
-        if process.returncode != 0:
-            error = stderr.decode(
-                "utf-8",
-                "ignore"
-            ).strip()
-
-            raise RuntimeError(
-                error[-700:] or "yt-dlp завершился с ошибкой"
-            )
-
-        files = []
-
-        for line in stdout.decode(
-            "utf-8",
-            "ignore"
-        ).splitlines():
-
-            line = line.strip()
-
-            if line and os.path.isfile(line):
-                files.append(line)
-
-        if not files:
-            files = [
-                str(file)
-                for file in Path(directory).iterdir()
-                if file.is_file()
-            ]
-
         if not files:
             raise RuntimeError(
-                "yt-dlp не вернул аудиофайл"
+                "yt-dlp не создал аудиофайл."
             )
 
-        return files[0]
+        return str(files[0])
 
     @loader.command(
         ru_doc="Скачать трек: .yt <название или ссылка>"
@@ -105,7 +97,7 @@ class YouTubeMusicMod(loader.Module):
         if not query:
             await utils.answer(
                 message,
-                self.strings["no_query"]
+                self.strings["no_query"],
             )
             return
 
@@ -113,7 +105,7 @@ class YouTubeMusicMod(loader.Module):
             message,
             self.strings["search"].format(
                 utils.escape_html(query)
-            )
+            ),
         )
 
         with tempfile.TemporaryDirectory(
@@ -125,21 +117,84 @@ class YouTubeMusicMod(loader.Module):
                     status,
                     self.strings["download"].format(
                         utils.escape_html(query)
-                    )
+                    ),
                 )
 
                 filepath = await self._download(
                     query,
-                    temp
+                    temp,
                 )
 
                 await message.client.send_file(
                     message.chat_id,
                     filepath,
-                    caption=self.strings["done"]
+                    caption=self.strings["done"],
                 )
 
                 await status.delete()
 
             except Exception as error:
-               
+                await utils.answer(
+                    status,
+                    self.strings["error"].format(
+                        utils.escape_html(str(error))
+                    ),
+                )
+
+    @loader.command(
+        ru_doc="Скачать трек: .ytadd <название или ссылка>"
+    )
+    async def ytaddcmd(self, message):
+        """Download a track using .ytadd."""
+
+        query = utils.get_args_raw(message).strip()
+
+        if not query:
+            reply = await message.get_reply_message()
+
+            if reply and getattr(
+                reply,
+                "message",
+                None,
+            ):
+                query = reply.message.strip()
+
+        if not query:
+            await utils.answer(
+                message,
+                self.strings["no_query"],
+            )
+            return
+
+        status = await utils.answer(
+            message,
+            self.strings["search"].format(
+                utils.escape_html(query)
+            ),
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="heroku_yt_"
+        ) as temp:
+
+            try:
+                filepath = await self._download(
+                    query,
+                    temp,
+                )
+
+                await message.client.send_file(
+                    message.chat_id,
+                    filepath,
+                    caption=self.strings["added"],
+                )
+
+                await status.delete()
+
+            except Exception as error:
+                await utils.answer(
+                    status,
+                    self.strings["error"].format(
+                        utils.escape_html(str(error))
+                    ),
+                )
