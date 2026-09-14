@@ -1,87 +1,208 @@
-# Gemini Media Module
-# Creator: @mxzavo
+# meta developer: @mxzavo
+# requires: google-genai pillow
 
-import os
-import base64
 import asyncio
-import tempfile
-import logging
+import io
+import os
+from PIL import Image
 from google import genai
+from google.genai import types
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    raise RuntimeError("GEMINI_API_KEY environment variable is not set")
-
-client = genai.Client(api_key=API_KEY)
+from .. import loader, utils
 
 
-async def generate_image(prompt: str) -> str:
-    """
-    Запрашивает у Gemini изображение по prompt и сохраняет его во временный PNG-файл.
-    Возвращает путь к сохранённому файлу.
-    """
+@loader.tds
+class GeminiAllInOneMod(loader.Module):
+    """Мультимодальный модуль Gemini: генерация, редактирование, анализ фото и текстовый чат"""
 
-    def call_api():
-        return client.interactions.create(model="gemini-3.1-flash-image", input=prompt)
+    strings = {
+        "name": "GeminiAI",
+        "no_key": (
+            "🚫 <b>Не задан API-ключ Gemini.</b>\n"
+            "Получи его на aistudio.google.com и укажи:\n"
+            "• в конфиге: <code>.config GeminiAI</code>\n"
+            "• или в переменной окружения <code>GEMINI_API_KEY</code>"
+        ),
+        "no_prompt": "❓ Укажи запрос или промпт.",
+        "no_reply_media": "❓ Ответь командой на фото или картинку.",
+        "no_image_returned": "🚫 Gemini не вернул изображение. Попробуй другой запрос.",
+        "error": "🚫 Ошибка: <code>{}</code>",
+        "generating": "🎨 Генерирую изображение...",
+        "editing": "🎨 Редактирую изображение...",
+        "thinking": "🧠 Обрабатываю запрос...",
+    }
 
-    try:
-        response = await asyncio.to_thread(call_api)
-    except Exception as e:
-        logger.exception("Gemini API call failed")
-        raise RuntimeError(f"API call failed: {e}") from e
+    def __init__(self):
+        self.config = loader.ModuleConfig(
+            loader.ConfigValue(
+                "api_key",
+                None,
+                "API-ключ Gemini (aistudio.google.com)",
+                validator=loader.validators.Hidden(),
+            ),
+            loader.ConfigValue(
+                "image_model",
+                "imagen-3.0-generate-002",
+                "Модель для генерации картинок из текста",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "chat_model",
+                "gemini-2.5-flash",
+                "Модель для текста, анализа и редактирования изображений",
+                validator=loader.validators.String(),
+            ),
+        )
 
-    # Попробуем извлечь base64-строку из возможных форм ответа
-    b64_data = None
+    def _get_key(self) -> str | None:
+        key = self.config["api_key"]
+        if key in (None, "", "None"):
+            key = os.environ.get("GEMINI_API_KEY")
+        return key
 
-    # 1) response.output_image.data
-    if getattr(response, "output_image", None):
-        out = response.output_image
-        b64_data = getattr(out, "data", None) or (out.get("data") if isinstance(out, dict) else None)
+    def _get_client(self) -> genai.Client:
+        key = self._get_key()
+        if not key:
+            raise ValueError("NO_KEY")
+        return genai.Client(api_key=key)
 
-    # 2) response.output_images (список)
-    if not b64_data and getattr(response, "output_images", None):
-        imgs = response.output_images
-        if imgs:
-            first = imgs[0]
-            b64_data = getattr(first, "data", None) or (first.get("data") if isinstance(first, dict) else None)
+    @loader.command()
+    async def genimg(self, message):
+        """<промпт> - сгенерировать новое изображение по описанию"""
+        prompt = utils.get_args_raw(message)
+        if not prompt:
+            await utils.answer(message, self.strings["no_prompt"])
+            return
 
-    # 3) content / text fields
-    if not b64_data:
-        b64_data = getattr(response, "content", None) or getattr(response, "text", None)
+        if not self._get_key():
+            await utils.answer(message, self.strings["no_key"])
+            return
 
-    if not b64_data:
-        # Для отладки можно логировать весь ответ
-        logger.error("Gemini did not return image data. Full response: %s", repr(response))
-        raise RuntimeError("Gemini не вернул изображение")
-
-    # Если это data URI, убираем префикс
-    if isinstance(b64_data, str) and b64_data.startswith("data:"):
-        parts = b64_data.split(",", 1)
-        if len(parts) == 2:
-            b64_data = parts[1]
-        else:
-            raise RuntimeError("Unexpected data URI format from Gemini")
-
-    # Если SDK вернул байты
-    if isinstance(b64_data, (bytes, bytearray)):
-        img_bytes = bytes(b64_data)
-    else:
+        await utils.answer(message, self.strings["generating"])
         try:
-            img_bytes = base64.b64decode(b64_data)
+            client = self._get_client()
+            result = await asyncio.to_thread(
+                client.models.generate_images,
+                model=self.config["image_model"],
+                prompt=prompt,
+                config=types.GenerateImagesConfig(number_of_images=1),
+            )
+
+            if not result.generated_images:
+                await utils.answer(message, self.strings["no_image_returned"])
+                return
+
+            photo = io.BytesIO(result.generated_images[0].image.image_bytes)
+            photo.name = "gemini.png"
+            await utils.answer(message, file=photo)
         except Exception as e:
-            logger.exception("Failed to decode base64 image data")
-            raise RuntimeError(f"Failed to decode base64 image data: {e}") from e
+            await utils.answer(
+                message, self.strings["error"].format(utils.escape_html(str(e)))
+            )
 
-    # Записываем во временный файл, чтобы не перезаписывать прошлые генерации
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    try:
-        tmp.write(img_bytes)
-        tmp.flush()
-    finally:
-        tmp.close()
+    @loader.command()
+    async def editimg(self, message):
+        """<реплай на фото> <промпт> - отредактировать изображение по текстовой инструкции"""
+        reply = await message.get_reply_message()
+        if not reply or not reply.media:
+            await utils.answer(message, self.strings["no_reply_media"])
+            return
 
-    logger.info("Image saved to %s", tmp.name)
-    return tmp.name
+        prompt = utils.get_args_raw(message)
+        if not prompt:
+            await utils.answer(message, self.strings["no_prompt"])
+            return
+
+        if not self._get_key():
+            await utils.answer(message, self.strings["no_key"])
+            return
+
+        await utils.answer(message, self.strings["editing"])
+        try:
+            image_bytes = await reply.download_media(bytes)
+            img = Image.open(io.BytesIO(image_bytes))
+
+            client = self._get_client()
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.config["chat_model"],
+                contents=[img, prompt],
+            )
+
+            # Проверяем, вернула ли мультимодальная модель отредактированную картинку
+            image_found = False
+            if response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if getattr(part, "inline_data", None):
+                        out_photo = io.BytesIO(part.inline_data.data)
+                        out_photo.name = "edited.png"
+                        await utils.answer(message, file=out_photo)
+                        image_found = True
+                        break
+
+            if not image_found:
+                # Если модель ответила текстовыми рекомендациями/описанием изменений
+                text = response.text or self.strings["no_image_returned"]
+                await utils.answer(message, text)
+
+        except Exception as e:
+            await utils.answer(
+                message, self.strings["error"].format(utils.escape_html(str(e)))
+            )
+
+    @loader.command()
+    async def askimg(self, message):
+        """<реплай на фото> [вопрос] - анализ фото, OCR, описание или ответ на вопрос по нему"""
+        reply = await message.get_reply_message()
+        if not reply or not reply.media:
+            await utils.answer(message, self.strings["no_reply_media"])
+            return
+
+        prompt = utils.get_args_raw(message) or "Подробно опиши, что изображено на картинке."
+
+        if not self._get_key():
+            await utils.answer(message, self.strings["no_key"])
+            return
+
+        await utils.answer(message, self.strings["thinking"])
+        try:
+            image_bytes = await reply.download_media(bytes)
+            img = Image.open(io.BytesIO(image_bytes))
+
+            client = self._get_client()
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.config["chat_model"],
+                contents=[img, prompt],
+            )
+            await utils.answer(message, response.text or "Пустой ответ.")
+        except Exception as e:
+            await utils.answer(
+                message, self.strings["error"].format(utils.escape_html(str(e)))
+            )
+
+    @loader.command()
+    async def gemini(self, message):
+        """<запрос> - текстовый диалог с Gemini"""
+        prompt = utils.get_args_raw(message)
+        if not prompt:
+            await utils.answer(message, self.strings["no_prompt"])
+            return
+
+        if not self._get_key():
+            await utils.answer(message, self.strings["no_key"])
+            return
+
+        await utils.answer(message, self.strings["thinking"])
+        try:
+            client = self._get_client()
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.config["chat_model"],
+                contents=prompt,
+            )
+            await utils.answer(message, response.text or "Пустой ответ.")
+        except Exception as e:
+            await utils.answer(
+                message, self.strings["error"].format(utils.escape_html(str(e)))
+            )
