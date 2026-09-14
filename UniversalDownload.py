@@ -327,4 +327,426 @@ class UniversalDownloadMod(loader.Module):
 
         _, _ = await process.communicate()
 
-        if process.returncode !=
+        if process.returncode != 0:
+            return source
+
+        if target.exists():
+            return target
+
+        return source
+
+    # =========================
+    # DIRECT HTTP FILE
+    # =========================
+
+    async def _http_download(self, url):
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=30,
+            sock_read=120,
+        )
+
+        headers = {
+            "User-Agent":
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "Chrome/140.0 Safari/537.36"
+        }
+
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers=headers,
+        ) as session:
+
+            async with session.get(
+                url,
+                allow_redirects=True,
+            ) as response:
+
+                response.raise_for_status()
+
+                content_type = (
+                    response.headers
+                    .get("Content-Type", "")
+                    .lower()
+                )
+
+                # HTML — это не файл.
+                if (
+                    "text/html" in content_type
+                    or "application/xhtml" in content_type
+                ):
+                    raise RuntimeError(
+                        "Ссылка ведёт на HTML-страницу."
+                    )
+
+                filename = None
+
+                # Content-Disposition
+                disposition = response.headers.get(
+                    "Content-Disposition",
+                    ""
+                )
+
+                if "filename=" in disposition:
+                    filename = (
+                        disposition
+                        .split("filename=", 1)[1]
+                        .strip()
+                        .strip('"')
+                        .strip("'")
+                    )
+
+                if not filename:
+                    filename = Path(
+                        urlparse(
+                            str(response.url)
+                        ).path
+                    ).name
+
+                if not filename:
+                    filename = "download"
+
+                # Безопасное имя.
+                filename = os.path.basename(
+                    filename
+                )
+
+                output = (
+                    Path(self.tmpdir) /
+                    filename
+                )
+
+                with open(
+                    output,
+                    "wb"
+                ) as file:
+
+                    async for chunk in (
+                        response.content
+                        .iter_chunked(1024 * 1024)
+                    ):
+                        file.write(chunk)
+
+        if not output.exists():
+            raise RuntimeError(
+                "Файл не был скачан."
+            )
+
+        return output
+
+    # =========================
+    # PROCESS URL
+    # =========================
+
+    async def _process_url(
+        self,
+        url,
+        message,
+    ):
+        self.tmpdir = tempfile.mkdtemp(
+            prefix="universal_dl_"
+        )
+
+        await message.edit(
+            self.strings["download"]
+        )
+
+        # Сначала yt-dlp.
+        try:
+            file = await self._ytdlp(url)
+
+        except Exception as ytdlp_error:
+            # Если yt-dlp не смог обработать
+            # ссылку — пробуем прямой файл.
+            try:
+                file = await self._http_download(
+                    url
+                )
+
+            except Exception:
+                raise RuntimeError(
+                    "Не удалось скачать ссылку.\n\n"
+                    + str(ytdlp_error)[-1200:]
+                )
+
+        if not file or not file.exists():
+            raise RuntimeError(
+                "Файл загрузить не удалось."
+            )
+
+        file_type = self._guess_type(file)
+
+        # Видео → гарантированный MP4.
+        if file_type == "video":
+            await message.edit(
+                self.strings["convert"]
+            )
+
+            file = await self._convert_video(
+                file
+            )
+
+        # Аудио → M4A.
+        elif file_type == "audio":
+            await message.edit(
+                self.strings["convert"]
+            )
+
+            file = await self._convert_audio(
+                file
+            )
+
+        # После конвертации определяем заново.
+        file_type = self._guess_type(file)
+
+        return file, file_type
+
+    # =========================
+    # .DL
+    # =========================
+
+    @loader.command()
+    async def dl(self, message):
+        """<ссылка> — скачать видео, фото, аудио или файл"""
+
+        self.task = asyncio.current_task()
+
+        args = utils.get_args_raw(
+            message
+        ).strip()
+
+        # -------------------------
+        # Telegram reply
+        # -------------------------
+
+        if not args and message.is_reply:
+
+            reply = await message.get_reply_message()
+
+            if not reply or not reply.media:
+                await utils.answer(
+                    message,
+                    self.strings["usage"]
+                )
+
+                self.task = None
+                return
+
+            try:
+                self.tmpdir = tempfile.mkdtemp(
+                    prefix="telegram_dl_"
+                )
+
+                await message.edit(
+                    self.strings["download"]
+                )
+
+                file = await reply.download_media(
+                    file=self.tmpdir
+                )
+
+                if not file:
+                    raise RuntimeError(
+                        "Не удалось скачать Telegram-медиа."
+                    )
+
+                file = Path(file)
+
+                file_type = self._guess_type(
+                    file
+                )
+
+                # Видео.
+                if file_type == "video":
+                    await message.edit(
+                        self.strings["convert"]
+                    )
+
+                    file = await self._convert_video(
+                        file
+                    )
+
+                    file_type = "video"
+
+                # Аудио.
+                elif file_type == "audio":
+                    await message.edit(
+                        self.strings["convert"]
+                    )
+
+                    file = await self._convert_audio(
+                        file
+                    )
+
+                    file_type = self._guess_type(
+                        file
+                    )
+
+                await message.edit(
+                    self.strings["send"]
+                )
+
+                kwargs = {}
+
+                if file_type == "video":
+                    kwargs["supports_streaming"] = True
+
+                # force_document=False позволяет
+                # Telegram определить медиа.
+                kwargs["force_document"] = False
+
+                await message.client.send_file(
+                    message.chat_id,
+                    str(file),
+                    caption=reply.text or None,
+                    **kwargs
+                )
+
+                await message.delete()
+
+            except asyncio.CancelledError:
+
+                try:
+                    await message.edit(
+                        self.strings["cancel"]
+                    )
+                except Exception:
+                    pass
+
+            except Exception as e:
+
+                try:
+                    await message.edit(
+                        self.strings["error"].format(
+                            str(e)[:1500]
+                        )
+                    )
+                except Exception:
+                    pass
+
+            finally:
+                await self._cleanup()
+                self.task = None
+
+            return
+
+        # -------------------------
+        # No arguments
+        # -------------------------
+
+        if not args:
+            await utils.answer(
+                message,
+                self.strings["usage"]
+            )
+
+            self.task = None
+            return
+
+        url = args.split()[0].strip()
+
+        # -------------------------
+        # URL validation
+        # -------------------------
+
+        if not url.startswith(
+            ("http://", "https://")
+        ):
+            await utils.answer(
+                message,
+                self.strings["bad_url"]
+            )
+
+            self.task = None
+            return
+
+        # -------------------------
+        # Download
+        # -------------------------
+
+        try:
+
+            await message.edit(
+                self.strings["start"]
+            )
+
+            file, file_type = (
+                await self._process_url(
+                    url,
+                    message
+                )
+            )
+
+            await message.edit(
+                self.strings["send"]
+            )
+
+            kwargs = {
+                "force_document": False
+            }
+
+            if file_type == "video":
+                kwargs[
+                    "supports_streaming"
+                ] = True
+
+            await message.client.send_file(
+                message.chat_id,
+                str(file),
+                **kwargs
+            )
+
+            await message.delete()
+
+        except asyncio.CancelledError:
+
+            try:
+                await message.edit(
+                    self.strings["cancel"]
+                )
+            except Exception:
+                pass
+
+        except Exception as e:
+
+            try:
+                await message.edit(
+                    self.strings["error"].format(
+                        str(e)[:1500]
+                    )
+                )
+            except Exception:
+                pass
+
+        finally:
+
+            await self._cleanup()
+
+            self.task = None
+
+    # =========================
+    # CANCEL
+    # =========================
+
+    @loader.command()
+    async def dlcancel(self, message):
+        """— отменить текущую загрузку"""
+
+        if (
+            self.task
+            and not self.task.done()
+        ):
+            self.task.cancel()
+
+            await utils.answer(
+                message,
+                self.strings["cancel"]
+            )
+
+        else:
+            await utils.answer(
+                message,
+                self.strings["no_task"]
+            )
