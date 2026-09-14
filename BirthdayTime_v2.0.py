@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------------
 # Name: BirthdayTime
-# Description: Premium birthday countdown with custom Telegram emojis
+# Description: Premium birthday countdown with Custom Emoji and surname timer
 # Author: @mxzavo
-# Version: 2.0 Premium
+# Version: 2.1
 # ---------------------------------------------------------------------------------
 # meta developer: @mxzavo
 # scope: BirthdayTime
@@ -19,85 +19,103 @@ from .. import loader, utils
 
 @loader.tds
 class BirthdayTime(loader.Module):
-    """Премиум-таймер до дня рождения."""
+    """Premium birthday countdown."""
 
     strings = {
         "name": "BirthdayTime",
 
         "no_date": (
-            '<tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
-            "<b>Дата не установлена</b>\n\n"
-            "🗓 Укажи её командой:\n"
+            '<tg-emoji emoji-id="5370999492914976897">🎂</tg-emoji> '
+            "<b>Дата дня рождения не установлена.</b>\n\n"
+            "Используй:\n"
             "<code>.btset ДД.ММ</code>"
         ),
 
         "bad_date": (
-            '<tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
-            "<b>Неверная дата</b>\n\n"
-            "🗓 Пример: <code>.btset 18.09</code>"
+            "❌ <b>Неверная дата.</b>\n\n"
+            "Пример:\n"
+            "<code>.btset 18.09</code>"
         ),
 
         "saved": (
-            '<tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
-            "Дата сохранена: <b>{}</b>"
+            '<tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
+            "<b>Дата сохранена:</b> {}"
         ),
 
         "countdown": (
-            '<tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
-            "<b>BIRTHDAY TIME</b>\n\n"
-
-            '<tg-emoji emoji-id="5370999492914976897">🎂</tg-emoji> '
-            "<b>До дня рождения</b>\n\n"
-
-            '<tg-emoji emoji-id="5472026645659401564">🗓</tg-emoji> '
+            '╭━━━ <tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
+            "<b>BIRTHDAY TIME</b> ━━━╮\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5370999492914976897">🎂</tg-emoji> '
+            "<b>До дня рождения</b>\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5472026645659401564">🗓</tg-emoji> '
             "Дата: <b>{}</b>\n"
-
-            '<tg-emoji emoji-id="5451646226975955576">⌛️</tg-emoji> '
-            "Осталось: <b>{} д. {:02d}:{:02d}:{:02d}</b>\n\n"
-
-            '<tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
+            '┃ <tg-emoji emoji-id="5451646226975955576">⌛️</tg-emoji> '
+            "Осталось: <b>{} д. {:02d}:{:02d}:{:02d}</b>\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
             "<b>Прогресс</b>\n"
-            "<code>{}</code> <b>{}%</b>\n\n"
-
-            "{}"
+            "┃ <code>{}</code> <b>{}%</b>\n"
+            "┃\n"
+            "┃ {}\n"
+            "┃\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯"
         ),
 
         "on": (
             '<tg-emoji emoji-id="5471952986970267163">💎</tg-emoji> '
-            "<b>Таймер в фамилии включён</b>"
+            "<b>Таймер в фамилии включён.</b>"
         ),
 
         "off": (
             '<tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
-            "<b>Таймер выключен</b>\n"
-            "♻️ Исходная фамилия восстановлена"
+            "<b>Таймер в фамилии выключен.</b>\n"
+            "Исходная фамилия восстановлена."
         ),
 
         "refresh": (
             '<tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
-            "<b>Фамилия обновлена</b>"
+            "<b>Фамилия обновлена.</b>"
         ),
 
         "failed": (
-            "❌ <b>Не удалось изменить фамилию</b>"
+            "❌ <b>Не удалось изменить фамилию.</b>"
         ),
 
         "not_enabled": (
-            "ℹ️ Таймер в фамилии сейчас выключен"
+            "ℹ️ <b>Таймер в фамилии сейчас выключен.</b>"
         ),
 
         "restored": (
-            "♻️ <b>Исходная фамилия восстановлена</b>"
+            "♻️ <b>Исходная фамилия восстановлена.</b>"
         ),
 
         "nothing_to_restore": (
-            "ℹ️ Сохранённой исходной фамилии нет"
+            "ℹ️ <b>Сохранённой исходной фамилии нет.</b>"
         ),
 
         "reset": (
-            '<tg-emoji emoji-id="5472164874886846699">✨</tg-emoji> '
-            "<b>Настройки BirthdayTime сброшены</b>"
+            "🧹 <b>Настройки BirthdayTime сброшены.</b>"
         ),
+
+        "interval": (
+            "⚡ <b>Интервал обновления:</b> {} сек."
+        ),
+
+        "format_saved": (
+            "📝 <b>Формат фамилии сохранён.</b>"
+        ),
+    }
+
+    # Telegram Premium Custom Emoji IDs
+    EMOJI = {
+        "cake": 5370999492914976897,
+        "calendar": 5472026645659401564,
+        "diamond": 5471952986970267163,
+        "hourglass": 5451646226975955576,
+        "sparkles": 5472164874886846699,
+        "fire": 5420315771991497307,
     }
 
     def __init__(self):
@@ -118,11 +136,15 @@ class BirthdayTime(loader.Module):
         self._task = None
 
     # -------------------------------------------------------------------------
-    # DATE
+    # DATABASE
     # -------------------------------------------------------------------------
 
     def _get_saved_date(self):
         return self.db.get(__name__, "birthday")
+
+    # -------------------------------------------------------------------------
+    # DATE
+    # -------------------------------------------------------------------------
 
     def _birthday(self):
         value = self._get_saved_date()
@@ -133,24 +155,26 @@ class BirthdayTime(loader.Module):
         try:
             day, month = map(int, value.split("."))
 
+            if not 1 <= month <= 12:
+                return None
+
+            if not 1 <= day <= 31:
+                return None
+
             now = datetime.now()
 
+            # Проверяем дату
             try:
-                birthday = datetime(
-                    now.year,
-                    month,
-                    day,
-                )
+                birthday = datetime(now.year, month, day)
             except ValueError:
+                # 29 февраля в невисокосный год
                 if day == 29 and month == 2:
-                    birthday = datetime(
-                        now.year,
-                        3,
-                        1,
-                    )
+                    birthday = datetime(now.year, 3, 1)
                 else:
                     return None
 
+            # Если день рождения уже прошёл —
+            # берём следующий год
             if birthday <= now:
                 try:
                     birthday = datetime(
@@ -186,16 +210,21 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     def _progress(self):
+        current = datetime.now()
         birthday = self._birthday()
 
         if birthday is None:
             return "░" * 14, 0
 
-        current = datetime.now()
-
-        previous = birthday.replace(
-            year=birthday.year - 1
-        )
+        try:
+            previous = birthday.replace(
+                year=birthday.year - 1
+            )
+        except ValueError:
+            previous = birthday.replace(
+                year=birthday.year - 1,
+                day=28,
+            )
 
         total = (
             birthday - previous
@@ -205,14 +234,16 @@ class BirthdayTime(loader.Module):
             current - previous
         ).total_seconds()
 
+        if total <= 0:
+            return "░" * 14, 0
+
+        percent = int(
+            elapsed / total * 100
+        )
+
         percent = min(
             100,
-            max(
-                0,
-                int(
-                    elapsed / total * 100
-                ),
-            ),
+            max(0, percent),
         )
 
         width = 14
@@ -241,7 +272,6 @@ class BirthdayTime(loader.Module):
             __name__,
             "original_last_name",
         ) is None:
-
             self.db.set(
                 __name__,
                 "original_last_name",
@@ -267,22 +297,26 @@ class BirthdayTime(loader.Module):
         )
 
         try:
-            new_name = name_format.format(days)
-
+            new_name = name_format.format(
+                days
+            )
         except (
             IndexError,
             KeyError,
             ValueError,
         ):
-            new_name = f"💎 {days} д."
+            new_name = (
+                f"💎 {days} д."
+            )
 
+        # Telegram ограничивает длину фамилии
         new_name = new_name[:64]
 
+        # Не отправляем одинаковый запрос
         if self.db.get(
             __name__,
             "last_applied_name",
         ) == new_name:
-
             return True
 
         await self.client(
@@ -336,7 +370,10 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     async def client_ready(self):
-        if self._task and not self._task.done():
+        if (
+            self._task
+            and not self._task.done()
+        ):
             self._task.cancel()
 
         self._task = asyncio.create_task(
@@ -344,13 +381,15 @@ class BirthdayTime(loader.Module):
         )
 
     async def on_unload(self):
-        if self._task and not self._task.done():
+        if (
+            self._task
+            and not self._task.done()
+        ):
             self._task.cancel()
 
     async def _worker(self):
         while True:
             try:
-
                 if self.db.get(
                     __name__,
                     "name_enabled",
@@ -370,9 +409,9 @@ class BirthdayTime(loader.Module):
                 interval = int(
                     self.config[
                         "update_interval"
-                    ] or 60
+                    ]
+                    or 60
                 )
-
             except (
                 ValueError,
                 TypeError,
@@ -380,10 +419,7 @@ class BirthdayTime(loader.Module):
                 interval = 60
 
             await asyncio.sleep(
-                max(
-                    10,
-                    interval,
-                )
+                max(10, interval)
             )
 
     # -------------------------------------------------------------------------
@@ -395,7 +431,6 @@ class BirthdayTime(loader.Module):
         en_doc="Show countdown",
     )
     async def bt(self, message):
-
         delta = self._left()
 
         if delta is None:
@@ -422,7 +457,6 @@ class BirthdayTime(loader.Module):
         bar, percent = self._progress()
 
         if days <= 7:
-
             status = (
                 '<tg-emoji emoji-id="5420315771991497307">'
                 "🔥</tg-emoji> "
@@ -430,7 +464,6 @@ class BirthdayTime(loader.Module):
             )
 
         elif days <= 30:
-
             status = (
                 '<tg-emoji emoji-id="5472164874886846699">'
                 "✨</tg-emoji> "
@@ -438,7 +471,6 @@ class BirthdayTime(loader.Module):
             )
 
         else:
-
             status = (
                 '<tg-emoji emoji-id="5451646226975955576">'
                 "⌛️</tg-emoji> "
@@ -447,15 +479,15 @@ class BirthdayTime(loader.Module):
 
         birthday = self._birthday()
 
-        date_text = (
-            birthday.strftime("%d.%m")
-            if birthday
-            else "—"
+        date_text = birthday.strftime(
+            "%d.%m"
         )
 
         await utils.answer(
             message,
-            self.strings("countdown").format(
+            self.strings(
+                "countdown"
+            ).format(
                 date_text,
                 days,
                 hours,
@@ -476,17 +508,20 @@ class BirthdayTime(loader.Module):
         en_doc="Set date: .btset DD.MM",
     )
     async def btset(self, message):
-
         raw = (
             utils.get_args_raw(message)
             .strip()
         )
 
         try:
+            parts = raw.split(".")
+
+            if len(parts) != 2:
+                raise ValueError
 
             day, month = map(
                 int,
-                raw.split("."),
+                parts,
             )
 
             if not 1 <= month <= 12:
@@ -503,7 +538,6 @@ class BirthdayTime(loader.Module):
                 )
 
             except ValueError:
-
                 if not (
                     day == 29
                     and month == 2
@@ -514,10 +548,11 @@ class BirthdayTime(loader.Module):
             ValueError,
             TypeError,
         ):
-
             return await utils.answer(
                 message,
-                self.strings("bad_date"),
+                self.strings(
+                    "bad_date"
+                ),
             )
 
         value = (
@@ -532,9 +567,9 @@ class BirthdayTime(loader.Module):
 
         await utils.answer(
             message,
-            self.strings("saved").format(
-                value
-            ),
+            self.strings(
+                "saved"
+            ).format(value),
         )
 
     # -------------------------------------------------------------------------
@@ -542,11 +577,10 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     @loader.command(
-        ru_doc="Включить/выключить таймер фамилии",
+        ru_doc="Включить или выключить таймер в фамилии",
         en_doc="Toggle surname timer",
     )
     async def btname(self, message):
-
         enabled = self.db.get(
             __name__,
             "name_enabled",
@@ -554,9 +588,8 @@ class BirthdayTime(loader.Module):
         )
 
         try:
-
+            # Выключение
             if enabled:
-
                 await self._restore_name()
 
                 self.db.set(
@@ -570,8 +603,8 @@ class BirthdayTime(loader.Module):
                     self.strings("off"),
                 )
 
+            # Проверяем дату
             if self._left() is None:
-
                 return await utils.answer(
                     message,
                     self.strings("no_date"),
@@ -593,21 +626,24 @@ class BirthdayTime(loader.Module):
             )
 
         except RPCError as e:
-
             self.db.set(
                 __name__,
                 "name_enabled",
                 False,
             )
 
+            error = utils.escape_html(
+                str(e)
+            )
+
             await utils.answer(
                 message,
-                "❌ Telegram не разрешил изменить фамилию:\n"
-                f"<code>{utils.escape_html(str(e))}</code>",
+                "❌ <b>Telegram не разрешил "
+                "изменить фамилию.</b>\n\n"
+                f"<code>{error}</code>",
             )
 
         except Exception as e:
-
             self.db.set(
                 __name__,
                 "name_enabled",
@@ -628,40 +664,42 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     @loader.command(
-        ru_doc="Обновить фамилию сейчас",
+        ru_doc="Принудительно обновить фамилию",
         en_doc="Refresh surname",
     )
     async def btrefresh(self, message):
-
         if not self.db.get(
             __name__,
             "name_enabled",
             False,
         ):
-
             return await utils.answer(
                 message,
-                self.strings("not_enabled"),
+                self.strings(
+                    "not_enabled"
+                ),
             )
 
         try:
-
             await self._set_name()
 
             await utils.answer(
                 message,
-                self.strings("refresh"),
+                self.strings(
+                    "refresh"
+                ),
             )
 
         except Exception as e:
-
             print(
                 f"BirthdayTime refresh: {e}"
             )
 
             await utils.answer(
                 message,
-                self.strings("failed"),
+                self.strings(
+                    "failed"
+                ),
             )
 
     # -------------------------------------------------------------------------
@@ -673,10 +711,10 @@ class BirthdayTime(loader.Module):
         en_doc="Restore original surname",
     )
     async def btrestore(self, message):
-
         try:
-
-            restored = await self._restore_name()
+            restored = (
+                await self._restore_name()
+            )
 
             self.db.set(
                 __name__,
@@ -685,14 +723,13 @@ class BirthdayTime(loader.Module):
             )
 
             if restored:
-
                 await utils.answer(
                     message,
-                    self.strings("restored"),
+                    self.strings(
+                        "restored"
+                    ),
                 )
-
             else:
-
                 await utils.answer(
                     message,
                     self.strings(
@@ -701,14 +738,15 @@ class BirthdayTime(loader.Module):
                 )
 
         except Exception as e:
-
             print(
                 f"BirthdayTime restore: {e}"
             )
 
             await utils.answer(
                 message,
-                self.strings("failed"),
+                self.strings(
+                    "failed"
+                ),
             )
 
     # -------------------------------------------------------------------------
@@ -720,14 +758,12 @@ class BirthdayTime(loader.Module):
         en_doc="Set interval: .btinterval SEC",
     )
     async def btinterval(self, message):
-
         raw = (
             utils.get_args_raw(message)
             .strip()
         )
 
         try:
-
             value = int(raw)
 
             if value < 10:
@@ -737,10 +773,10 @@ class BirthdayTime(loader.Module):
             ValueError,
             TypeError,
         ):
-
             return await utils.answer(
                 message,
-                "❌ Укажи число от <b>10</b> секунд.",
+                "❌ Укажи число от "
+                "<b>10</b> секунд.",
             )
 
         self.config[
@@ -749,7 +785,9 @@ class BirthdayTime(loader.Module):
 
         await utils.answer(
             message,
-            f'⚡ Интервал: <b>{value} сек.</b>',
+            self.strings(
+                "interval"
+            ).format(value),
         )
 
     # -------------------------------------------------------------------------
@@ -757,11 +795,10 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     @loader.command(
-        ru_doc="Изменить формат фамилии",
+        ru_doc="Изменить формат: .btformat ТЕКСТ с {}",
         en_doc="Set surname format",
     )
     async def btformat(self, message):
-
         value = (
             utils.get_args_raw(message)
             .strip()
@@ -771,12 +808,11 @@ class BirthdayTime(loader.Module):
             "{}" not in value
             or len(value) > 50
         ):
-
             return await utils.answer(
                 message,
                 "❌ Формат должен содержать "
                 "<code>{}</code> и быть не длиннее "
-                "50 символов.",
+                "<b>50</b> символов.",
             )
 
         self.config[
@@ -785,9 +821,9 @@ class BirthdayTime(loader.Module):
 
         await utils.answer(
             message,
-            '<tg-emoji emoji-id="5472164874886846699">'
-            "✨</tg-emoji> "
-            "<b>Формат сохранён</b>",
+            self.strings(
+                "format_saved"
+            ),
         )
 
     # -------------------------------------------------------------------------
@@ -799,52 +835,59 @@ class BirthdayTime(loader.Module):
         en_doc="Show settings",
     )
     async def btstatus(self, message):
-
         date = (
             self._get_saved_date()
             or "не установлена"
         )
 
         enabled = (
-            "💎 включён"
+            "включён"
             if self.db.get(
                 __name__,
                 "name_enabled",
                 False,
             )
-            else "○ выключен"
+            else "выключен"
         )
 
         name_format = str(
-            self.config["name_format"]
+            self.config[
+                "name_format"
+            ]
         )
 
         try:
-            name_format = utils.escape_html(
-                name_format
+            name_format = (
+                utils.escape_html(
+                    name_format
+                )
             )
         except Exception:
             pass
 
-        await utils.answer(
-            message,
-            '<tg-emoji emoji-id="5471952986970267163">'
+        text = (
+            '╭━━━ <tg-emoji emoji-id="5471952986970267163">'
             "💎</tg-emoji> "
-            "<b>BIRTHDAY TIME</b>\n\n"
-
-            '<tg-emoji emoji-id="5370999492914976897">'
+            "<b>BIRTHDAY TIME</b> ━━━╮\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5370999492914976897">'
             "🎂</tg-emoji> "
             f"Дата: <b>{date}</b>\n"
-
-            f"🏷 Таймер: <b>{enabled}</b>\n"
-
-            '<tg-emoji emoji-id="5451646226975955576">'
+            "┃\n"
+            f"┃ 🏷 Таймер: <b>{enabled}</b>\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5451646226975955576">'
             "⌛️</tg-emoji> "
             f"Интервал: <b>{self.config['update_interval']} сек.</b>\n"
+            "┃\n"
+            f"┃ 📝 Формат: <code>{name_format}</code>\n"
+            "┃\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯"
+        )
 
-            '<tg-emoji emoji-id="5472164874886846699">'
-            "✨</tg-emoji> "
-            f"Формат: <code>{name_format}</code>",
+        await utils.answer(
+            message,
+            text,
         )
 
     # -------------------------------------------------------------------------
@@ -852,13 +895,11 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     @loader.command(
-        ru_doc="Полностью сбросить BirthdayTime",
-        en_doc="Reset BirthdayTime",
+        ru_doc="Полностью сбросить настройки",
+        en_doc="Reset settings",
     )
     async def btreset(self, message):
-
         try:
-
             if self.db.get(
                 __name__,
                 "name_enabled",
@@ -867,9 +908,8 @@ class BirthdayTime(loader.Module):
                 await self._restore_name()
 
         except Exception as e:
-
             print(
-                f"BirthdayTime reset: {e}"
+                f"BirthdayTime reset restore: {e}"
             )
 
         self.db.set(
@@ -906,42 +946,35 @@ class BirthdayTime(loader.Module):
     # -------------------------------------------------------------------------
 
     @loader.command(
-        ru_doc="Справка BirthdayTime",
+        ru_doc="Справка по BirthdayTime",
         en_doc="BirthdayTime help",
     )
     async def bthelp(self, message):
+        text = (
+            '╭━━━ <tg-emoji emoji-id="5471952986970267163">'
+            "💎</tg-emoji> "
+            "<b>BIRTHDAY TIME v2.1</b> ━━━╮\n"
+            "┃\n"
+            '┃ <tg-emoji emoji-id="5370999492914976897">'
+            "🎂</tg-emoji> "
+            "<code>.bt</code> — отсчёт\n"
+            '┃ <tg-emoji emoji-id="5472026645659401564">'
+            "🗓</tg-emoji> "
+            "<code>.btset ДД.ММ</code> — дата\n"
+            "┃ 🏷 <code>.btname</code> — таймер фамилии\n"
+            '┃ <tg-emoji emoji-id="5472164874886846699">'
+            "✨</tg-emoji> "
+            "<code>.btrefresh</code> — обновить\n"
+            "┃ ♻️ <code>.btrestore</code> — восстановить\n"
+            "┃ ⚡ <code>.btinterval 60</code> — интервал\n"
+            "┃ 📝 <code>.btformat 💎 {} д.</code> — формат\n"
+            "┃ ⚙️ <code>.btstatus</code> — настройки\n"
+            "┃ 🧹 <code>.btreset</code> — полный сброс\n"
+            "┃\n"
+            "╰━━━━━━━━━━━━━━━━━━━━━━╯"
+        )
 
         await utils.answer(
             message,
-            '<tg-emoji emoji-id="5471952986970267163">'
-            "💎</tg-emoji> "
-            "<b>BIRTHDAY TIME v2.0</b>\n\n"
-
-            '<tg-emoji emoji-id="5370999492914976897">'
-            "🎂</tg-emoji> '
-            "<code>.bt</code> — отсчёт\n"
-
-            '<tg-emoji emoji-id="5472026645659401564">'
-            "🗓</tg-emoji> "
-            "<code>.btset ДД.ММ</code> — дата\n"
-
-            "🏷 <code>.btname</code> — таймер фамилии\n"
-
-            '<tg-emoji emoji-id="5472164874886846699">'
-            "✨</tg-emoji> "
-            "<code>.btrefresh</code> — обновить\n"
-
-            '<tg-emoji emoji-id="5451646226975955576">'
-            "⌛️</tg-emoji> "
-            "<code>.btrestore</code> — восстановить фамилию\n"
-
-            "⚡ <code>.btinterval 60</code> — интервал\n"
-
-            "📝 <code>.btformat 💎 {} д.</code> — формат\n"
-
-            "⚙️ <code>.btstatus</code> — настройки\n"
-
-            '<tg-emoji emoji-id="5472164874886846699">'
-            "✨</tg-emoji> "
-            "<code>.btreset</code> — полный сброс",
+            text,
         )
