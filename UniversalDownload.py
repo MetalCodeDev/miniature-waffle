@@ -15,86 +15,87 @@ from .. import loader, utils
 
 
 @loader.tds
-class UniversalDownloaderMod(loader.Module):
-    """Универсальный загрузчик — @mxzavo"""
+class DownloaderMod(loader.Module):
+    """Universal Downloader"""
 
     strings = {
-        "name": "UniversalDownloader",
+        "name": "Downloader",
 
         "usage": (
-            "<emoji> <b>Использование:</b>\n"
+            "📥 <b>Использование:</b>\n"
             "<code>.dl &lt;ссылка&gt;</code>\n"
-            "<code>.dl</code> в ответ на медиа"
+            "<code>.dl</code> — ответом на медиа"
         ),
 
-        "starting": "<emoji> <b>Подготавливаю загрузку...</b>",
-        "downloading": "<emoji> <b>Загружаю...</b>",
-        "sending": "<emoji> <b>Отправляю файл...</b>",
-        "done": "<emoji> <b>Готово.</b>",
-        "cancelled": "<emoji> <b>Загрузка отменена.</b>",
-        "no_task": "<emoji> <b>Активной загрузки нет.</b>",
-        "error": "<emoji> <b>Ошибка:</b> <code>{}</code>",
+        "starting": "⏳ <b>Подготавливаю загрузку...</b>",
+        "downloading": "📥 <b>Загружаю...</b>",
+        "sending": "📤 <b>Отправляю файл...</b>",
+        "done": "✅ <b>Готово.</b>",
+        "cancelled": "❌ <b>Загрузка отменена.</b>",
+        "no_task": "ℹ️ <b>Активной загрузки нет.</b>",
+        "error": "⚠️ <b>Ошибка:</b> <code>{}</code>",
     }
-
-    strings_ru = strings
 
     def __init__(self):
         self.task = None
         self.tmpdir = None
 
-    async def _download_http(self, url, output):
-        """Скачивание обычного файла по HTTP/HTTPS."""
+    async def _cleanup(self):
+        if self.tmpdir and os.path.exists(self.tmpdir):
+            shutil.rmtree(
+                self.tmpdir,
+                ignore_errors=True
+            )
 
+        self.tmpdir = None
+
+    async def _http_download(self, url, output):
         timeout = aiohttp.ClientTimeout(
             total=None,
             sock_connect=30,
-            sock_read=60,
+            sock_read=60
         )
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout
+        ) as session:
+
             async with session.get(
                 url,
-                allow_redirects=True,
+                allow_redirects=True
             ) as response:
 
                 response.raise_for_status()
 
                 with open(output, "wb") as file:
                     async for chunk in response.content.iter_chunked(
-                        1024 * 512
+                        512 * 1024
                     ):
                         file.write(chunk)
 
         return output
 
-    async def _download_ytdlp(self, url, directory):
-        """Скачивание через yt-dlp."""
-
+    async def _ytdlp_download(self, url, directory):
         try:
             import yt_dlp
         except ImportError:
             raise RuntimeError(
-                "Не установлен yt-dlp. Установи зависимость yt-dlp."
+                "Не установлен yt-dlp"
             )
 
         output = os.path.join(
             directory,
-            "%(title).120s-%(id)s.%(ext)s",
+            "%(title).100s-%(id)s.%(ext)s"
         )
 
         options = {
             "outtmpl": output,
             "noplaylist": True,
-
             "quiet": True,
             "no_warnings": True,
-
             "restrictfilenames": True,
-
             "retries": 3,
             "fragment_retries": 3,
-
-            # Не объединяем огромные форматы без необходимости.
             "merge_output_format": "mp4",
         }
 
@@ -104,71 +105,69 @@ class UniversalDownloaderMod(loader.Module):
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(
                     url,
-                    download=True,
+                    download=True
                 )
 
-                filename = ydl.prepare_filename(info)
+                filename = Path(
+                    ydl.prepare_filename(info)
+                )
 
-                # После merge yt-dlp может изменить расширение.
-                possible = [
-                    Path(filename),
-                    Path(os.path.splitext(filename)[0] + ".mp4"),
-                    Path(os.path.splitext(filename)[0] + ".mkv"),
-                    Path(os.path.splitext(filename)[0] + ".webm"),
+                candidates = [
+                    filename,
+                    Path(
+                        os.path.splitext(
+                            str(filename)
+                        )[0] + ".mp4"
+                    ),
+                    Path(
+                        os.path.splitext(
+                            str(filename)
+                        )[0] + ".mkv"
+                    ),
+                    Path(
+                        os.path.splitext(
+                            str(filename)
+                        )[0] + ".webm"
+                    ),
                 ]
 
-                for file in possible:
+                for file in candidates:
                     if file.exists():
                         return file
 
-                return Path(filename)
+                raise RuntimeError(
+                    "Скачанный файл не найден"
+                )
 
         return await loop.run_in_executor(
             None,
-            worker,
+            worker
         )
 
-    async def _cleanup(self):
-        """Удаляет временные файлы."""
-
-        if self.tmpdir and os.path.exists(self.tmpdir):
-            try:
-                shutil.rmtree(
-                    self.tmpdir,
-                    ignore_errors=True,
-                )
-            except Exception:
-                pass
-
-        self.tmpdir = None
-
-    async def _process_url(self, url, message):
-        """Определяет способ загрузки."""
-
+    async def _download(self, url, message):
         self.tmpdir = tempfile.mkdtemp(
-            prefix="heroku_dl_"
+            prefix="heroku_downloader_"
         )
 
-        # Сначала пробуем yt-dlp.
+        # Сначала пробуем yt-dlp
         try:
             await message.edit(
                 self.strings["downloading"]
             )
 
-            file = await self._download_ytdlp(
+            file = await self._ytdlp_download(
                 url,
-                self.tmpdir,
+                self.tmpdir
             )
 
-            if file and file.exists():
+            if file.exists():
                 return file
 
         except Exception:
-            # Если yt-dlp не смог обработать ссылку,
-            # пробуем обычный HTTP downloader.
             pass
 
-        # Fallback: обычный HTTP/HTTPS файл.
+        # Если yt-dlp не справился —
+        # пробуем скачать ссылку как обычный файл
         filename = Path(
             urlparse(url).path
         ).name
@@ -176,31 +175,35 @@ class UniversalDownloaderMod(loader.Module):
         if not filename:
             filename = "download"
 
-        output = Path(self.tmpdir) / filename
+        output = Path(
+            self.tmpdir
+        ) / filename
 
-        await self._download_http(
+        await self._http_download(
             url,
-            output,
+            output
         )
 
         if not output.exists():
             raise RuntimeError(
-                "Файл не был загружен."
+                "Не удалось скачать файл"
             )
 
         return output
 
     @loader.command()
     async def dl(self, message):
-        """<url> — скачать файл/медиа"""
+        """<ссылка> — скачать файл или медиа"""
 
         args = utils.get_args_raw(
             message
         ).strip()
 
-        # ==========================================
-        # Telegram media через reply
-        # ==========================================
+        self.task = asyncio.current_task()
+
+        # =========================
+        # Telegram media
+        # =========================
 
         if not args and message.is_reply:
             reply = await message.get_reply_message()
@@ -208,11 +211,9 @@ class UniversalDownloaderMod(loader.Module):
             if not reply or not reply.media:
                 await utils.answer(
                     message,
-                    self.strings["usage"],
+                    self.strings["usage"]
                 )
                 return
-
-            self.task = asyncio.current_task()
 
             try:
                 await message.edit(
@@ -229,7 +230,7 @@ class UniversalDownloaderMod(loader.Module):
 
                 if not file:
                     raise RuntimeError(
-                        "Не удалось скачать медиа."
+                        "Не удалось скачать медиа"
                     )
 
                 await message.edit(
@@ -239,7 +240,7 @@ class UniversalDownloaderMod(loader.Module):
                 await message.client.send_file(
                     message.chat_id,
                     file,
-                    caption=reply.text or None,
+                    caption=reply.text or None
                 )
 
                 await message.delete()
@@ -262,15 +263,16 @@ class UniversalDownloaderMod(loader.Module):
 
             return
 
-        # ==========================================
+        # =========================
         # URL
-        # ==========================================
+        # =========================
 
         if not args:
             await utils.answer(
                 message,
-                self.strings["usage"],
+                self.strings["usage"]
             )
+            self.task = None
             return
 
         url = args.split()[0]
@@ -280,25 +282,24 @@ class UniversalDownloaderMod(loader.Module):
         ):
             await utils.answer(
                 message,
-                self.strings["usage"],
+                self.strings["usage"]
             )
+            self.task = None
             return
-
-        self.task = asyncio.current_task()
 
         try:
             await message.edit(
                 self.strings["starting"]
             )
 
-            file = await self._process_url(
+            file = await self._download(
                 url,
-                message,
+                message
             )
 
-            if not file.exists():
+            if not file or not file.exists():
                 raise RuntimeError(
-                    "Файл не найден после загрузки."
+                    "Файл не найден"
                 )
 
             await message.edit(
@@ -307,22 +308,28 @@ class UniversalDownloaderMod(loader.Module):
 
             await message.client.send_file(
                 message.chat_id,
-                str(file),
+                str(file)
             )
 
             await message.delete()
 
         except asyncio.CancelledError:
-            await message.edit(
-                self.strings["cancelled"]
-            )
+            try:
+                await message.edit(
+                    self.strings["cancelled"]
+                )
+            except Exception:
+                pass
 
         except Exception as e:
-            await message.edit(
-                self.strings["error"].format(
-                    str(e)[:500]
+            try:
+                await message.edit(
+                    self.strings["error"].format(
+                        str(e)[:500]
+                    )
                 )
-            )
+            except Exception:
+                pass
 
         finally:
             await self._cleanup()
@@ -340,10 +347,10 @@ class UniversalDownloaderMod(loader.Module):
 
             await utils.answer(
                 message,
-                self.strings["cancelled"],
+                self.strings["cancelled"]
             )
         else:
             await utils.answer(
                 message,
-                self.strings["no_task"],
-            )
+                self.strings["no_task"]
+        ) 
