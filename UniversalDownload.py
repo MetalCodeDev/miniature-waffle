@@ -21,22 +21,19 @@ class UniversalDownloadMod(loader.Module):
 
     strings = {
         "name": "UniversalDownload",
-
         "usage": (
             "📥 <b>Использование:</b>\n\n"
             "<code>.dl &lt;ссылка&gt;</code> — скачать ссылку\n"
             "<code>.dl</code> — скачать Telegram-медиа ответом\n"
             "<code>.dlcancel</code> — отменить загрузку"
         ),
-
         "start": "⏳ <b>Начинаю загрузку...</b>",
         "download": "📥 <b>Скачиваю...</b>",
-        "convert": "⚙️ <b>Конвертирую видео...</b>",
-        "send": "📤 <b>Отправляю файл...</b>",
+        "convert": "⚙️ <b>Конвертирую...</b>",
+        "send": "📤 <b>Отправляю...</b>",
         "cancel": "❌ <b>Загрузка отменена.</b>",
         "no_task": "ℹ️ <b>Активной загрузки нет.</b>",
         "bad_url": "❌ <b>Укажи HTTP/HTTPS-ссылку.</b>",
-        "html": "❌ <b>Ссылка ведёт на веб-страницу, а не на файл.</b>",
         "error": "❌ <b>Ошибка:</b>\n<code>{}</code>",
     }
 
@@ -44,30 +41,23 @@ class UniversalDownloadMod(loader.Module):
         self.task = None
         self.tmpdir = None
 
-    # =========================
-    # UTILS
-    # =========================
-
     def _has_ffmpeg(self):
         return shutil.which("ffmpeg") is not None
 
-    async def _cleanup(self):
-        if self.tmpdir and os.path.exists(self.tmpdir):
-            shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-        self.tmpdir = None
-
-    def _files(self):
+    def _get_files(self):
         if not self.tmpdir:
             return []
 
         return [
-            p for p in Path(self.tmpdir).rglob("*")
+            p
+            for p in Path(self.tmpdir).rglob("*")
             if p.is_file()
+            and not p.name.endswith((".part", ".ytdl"))
         ]
 
     def _guess_type(self, path):
         mime, _ = mimetypes.guess_type(str(path))
+        ext = Path(path).suffix.lower()
 
         if mime:
             if mime.startswith("video/"):
@@ -79,11 +69,9 @@ class UniversalDownloadMod(loader.Module):
             if mime.startswith("audio/"):
                 return "audio"
 
-        ext = Path(path).suffix.lower()
-
         if ext in {
-            ".mp4", ".mkv", ".webm", ".mov", ".avi",
-            ".flv", ".m4v", ".ts", ".3gp"
+            ".mp4", ".mkv", ".webm", ".mov",
+            ".avi", ".flv", ".m4v", ".ts", ".3gp"
         }:
             return "video"
 
@@ -95,110 +83,83 @@ class UniversalDownloadMod(loader.Module):
 
         if ext in {
             ".mp3", ".m4a", ".aac", ".flac",
-            ".ogg", ".opus", ".wav", ".webm"
+            ".ogg", ".opus", ".wav"
         }:
             return "audio"
 
         return "document"
 
-    # =========================
-    # YT-DLP
-    # =========================
+    async def _cleanup(self):
+        if self.tmpdir:
+            shutil.rmtree(
+                self.tmpdir,
+                ignore_errors=True
+            )
+            self.tmpdir = None
 
     async def _ytdlp(self, url):
         try:
             import yt_dlp
-        except ImportError:
+        except ImportError as exc:
             raise RuntimeError(
                 "yt-dlp не установлен."
-            )
+            ) from exc
 
         if not self._has_ffmpeg():
             raise RuntimeError(
-                "FFmpeg не найден в PATH Heroku."
+                "FFmpeg не найден в PATH."
             )
 
         output = str(
-            Path(self.tmpdir) /
-            "%(title).100s [%(id)s].%(ext)s"
+            Path(self.tmpdir)
+            / "%(title).100s [%(id)s].%(ext)s"
         )
 
         options = {
             "outtmpl": output,
-
             "noplaylist": True,
-
-            "quiet": False,
-            "no_warnings": False,
-
-            "restrictfilenames": False,
-
-            "retries": 5,
-            "fragment_retries": 5,
 
             # Лучшее видео + лучшее аудио.
             "format": "bv*+ba/b",
 
-            # Всегда просим итоговый MP4.
+            # После объединения — MP4.
             "merge_output_format": "mp4",
 
-            # Не оставлять исходные потоки.
-            "keepvideo": False,
+            "retries": 5,
+            "fragment_retries": 5,
+
+            "quiet": True,
+            "no_warnings": True,
+            "restrictfilenames": False,
 
             "http_headers": {
                 "User-Agent": (
                     "Mozilla/5.0 "
                     "(Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) "
                     "Chrome/140.0 Safari/537.36"
                 )
             },
-
-            "postprocessors": [
-                {
-                    "key": "FFmpegVideoRemuxer",
-                    "preferedformat": "mp4",
-                }
-            ],
         }
 
         loop = asyncio.get_running_loop()
 
         def worker():
             with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(
+                ydl.extract_info(
                     url,
                     download=True
                 )
 
-                files = self._files()
+                files = self._get_files()
 
                 if not files:
-                    filename = ydl.prepare_filename(info)
-                    candidate = Path(filename)
-
-                    if candidate.exists():
-                        return candidate
-
                     raise RuntimeError(
                         "yt-dlp не создал файл."
                     )
 
-                # Не выбираем временные .part-файлы.
-                files = [
-                    f for f in files
-                    if not f.name.endswith(".part")
-                ]
-
-                if not files:
-                    raise RuntimeError(
-                        "После загрузки файл не найден."
-                    )
-
-                # Берём самый большой файл.
                 files.sort(
-                    key=lambda x: x.stat().st_size,
+                    key=lambda item: item.stat().st_size,
                     reverse=True
                 )
 
@@ -209,23 +170,15 @@ class UniversalDownloadMod(loader.Module):
             worker
         )
 
-    # =========================
-    # VIDEO CONVERSION
-    # =========================
-
     async def _convert_video(self, source):
         if not self._has_ffmpeg():
             raise RuntimeError(
-                "FFmpeg не найден."
+                "FFmpeg не найден в PATH."
             )
 
-        source = Path(source)
-
-        # Если уже MP4, всё равно приводим
-        # к совместимому Telegram-варианту.
         target = (
-            Path(self.tmpdir) /
-            "telegram_video.mp4"
+            Path(self.tmpdir)
+            / "telegram_video.mp4"
         )
 
         command = [
@@ -235,19 +188,26 @@ class UniversalDownloadMod(loader.Module):
             "-i",
             str(source),
 
-            # H.264
+            "-map",
+            "0:v:0",
+
+            "-map",
+            "0:a:0?",
+
+            # H.264.
             "-c:v",
             "libx264",
 
-            # Совместимый pixel format
-            "-pix_fmt",
-            "yuv420p",
+            "-preset",
+            "veryfast",
 
-            # Хорошее качество.
             "-crf",
             "23",
 
-            # AAC audio.
+            "-pix_fmt",
+            "yuv420p",
+
+            # AAC.
             "-c:a",
             "aac",
 
@@ -270,13 +230,13 @@ class UniversalDownloadMod(loader.Module):
         _, stderr = await process.communicate()
 
         if process.returncode != 0:
-            error = stderr.decode(
+            details = stderr.decode(
                 errors="ignore"
-            )[-2000:]
+            )[-1500:]
 
             raise RuntimeError(
-                "FFmpeg не смог обработать видео:\n"
-                + error
+                "FFmpeg ошибка:\n"
+                + details
             )
 
         if not target.exists():
@@ -286,19 +246,13 @@ class UniversalDownloadMod(loader.Module):
 
         return target
 
-    # =========================
-    # AUDIO CONVERSION
-    # =========================
-
     async def _convert_audio(self, source):
         if not self._has_ffmpeg():
             return source
 
-        source = Path(source)
-
         target = (
-            Path(self.tmpdir) /
-            "audio.m4a"
+            Path(self.tmpdir)
+            / "audio.m4a"
         )
 
         command = [
@@ -327,17 +281,13 @@ class UniversalDownloadMod(loader.Module):
 
         _, _ = await process.communicate()
 
-        if process.returncode != 0:
-            return source
-
-        if target.exists():
+        if (
+            process.returncode == 0
+            and target.exists()
+        ):
             return target
 
         return source
-
-    # =========================
-    # DIRECT HTTP FILE
-    # =========================
 
     async def _http_download(self, url):
         timeout = aiohttp.ClientTimeout(
@@ -347,11 +297,7 @@ class UniversalDownloadMod(loader.Module):
         )
 
         headers = {
-            "User-Agent":
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "Chrome/140.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0"
         }
 
         async with aiohttp.ClientSession(
@@ -372,7 +318,6 @@ class UniversalDownloadMod(loader.Module):
                     .lower()
                 )
 
-                # HTML — это не файл.
                 if (
                     "text/html" in content_type
                     or "application/xhtml" in content_type
@@ -381,41 +326,22 @@ class UniversalDownloadMod(loader.Module):
                         "Ссылка ведёт на HTML-страницу."
                     )
 
-                filename = None
-
-                # Content-Disposition
-                disposition = response.headers.get(
-                    "Content-Disposition",
-                    ""
-                )
-
-                if "filename=" in disposition:
-                    filename = (
-                        disposition
-                        .split("filename=", 1)[1]
-                        .strip()
-                        .strip('"')
-                        .strip("'")
-                    )
-
-                if not filename:
-                    filename = Path(
-                        urlparse(
-                            str(response.url)
-                        ).path
-                    ).name
+                filename = Path(
+                    urlparse(
+                        str(response.url)
+                    ).path
+                ).name
 
                 if not filename:
                     filename = "download"
 
-                # Безопасное имя.
                 filename = os.path.basename(
                     filename
                 )
 
                 output = (
-                    Path(self.tmpdir) /
-                    filename
+                    Path(self.tmpdir)
+                    / filename
                 )
 
                 with open(
@@ -425,7 +351,9 @@ class UniversalDownloadMod(loader.Module):
 
                     async for chunk in (
                         response.content
-                        .iter_chunked(1024 * 1024)
+                        .iter_chunked(
+                            1024 * 1024
+                        )
                     ):
                         file.write(chunk)
 
@@ -435,10 +363,6 @@ class UniversalDownloadMod(loader.Module):
             )
 
         return output
-
-    # =========================
-    # PROCESS URL
-    # =========================
 
     async def _process_url(
         self,
@@ -453,13 +377,14 @@ class UniversalDownloadMod(loader.Module):
             self.strings["download"]
         )
 
-        # Сначала yt-dlp.
+        ytdlp_error = None
+
         try:
             file = await self._ytdlp(url)
 
-        except Exception as ytdlp_error:
-            # Если yt-dlp не смог обработать
-            # ссылку — пробуем прямой файл.
+        except Exception as exc:
+            ytdlp_error = exc
+
             try:
                 file = await self._http_download(
                     url
@@ -471,14 +396,10 @@ class UniversalDownloadMod(loader.Module):
                     + str(ytdlp_error)[-1200:]
                 )
 
-        if not file or not file.exists():
-            raise RuntimeError(
-                "Файл загрузить не удалось."
-            )
+        file_type = self._guess_type(
+            file
+        )
 
-        file_type = self._guess_type(file)
-
-        # Видео → гарантированный MP4.
         if file_type == "video":
             await message.edit(
                 self.strings["convert"]
@@ -488,7 +409,6 @@ class UniversalDownloadMod(loader.Module):
                 file
             )
 
-        # Аудио → M4A.
         elif file_type == "audio":
             await message.edit(
                 self.strings["convert"]
@@ -498,14 +418,35 @@ class UniversalDownloadMod(loader.Module):
                 file
             )
 
-        # После конвертации определяем заново.
-        file_type = self._guess_type(file)
+        return (
+            file,
+            self._guess_type(file)
+        )
 
-        return file, file_type
+    async def _send_file(
+        self,
+        message,
+        file,
+        file_type,
+        caption=None,
+    ):
+        kwargs = {
+            "force_document": (
+                file_type == "document"
+            )
+        }
 
-    # =========================
-    # .DL
-    # =========================
+        if file_type == "video":
+            kwargs[
+                "supports_streaming"
+            ] = True
+
+        await message.client.send_file(
+            message.chat_id,
+            str(file),
+            caption=caption,
+            **kwargs,
+        )
 
     @loader.command()
     async def dl(self, message):
@@ -517,10 +458,7 @@ class UniversalDownloadMod(loader.Module):
             message
         ).strip()
 
-        # -------------------------
-        # Telegram reply
-        # -------------------------
-
+        # Telegram-медиа ответом
         if not args and message.is_reply:
 
             reply = await message.get_reply_message()
@@ -534,11 +472,11 @@ class UniversalDownloadMod(loader.Module):
                 self.task = None
                 return
 
-            try:
-                self.tmpdir = tempfile.mkdtemp(
-                    prefix="telegram_dl_"
-                )
+            self.tmpdir = tempfile.mkdtemp(
+                prefix="telegram_dl_"
+            )
 
+            try:
                 await message.edit(
                     self.strings["download"]
                 )
@@ -558,7 +496,6 @@ class UniversalDownloadMod(loader.Module):
                     file
                 )
 
-                # Видео.
                 if file_type == "video":
                     await message.edit(
                         self.strings["convert"]
@@ -570,7 +507,6 @@ class UniversalDownloadMod(loader.Module):
 
                     file_type = "video"
 
-                # Аудио.
                 elif file_type == "audio":
                     await message.edit(
                         self.strings["convert"]
@@ -588,26 +524,16 @@ class UniversalDownloadMod(loader.Module):
                     self.strings["send"]
                 )
 
-                kwargs = {}
-
-                if file_type == "video":
-                    kwargs["supports_streaming"] = True
-
-                # force_document=False позволяет
-                # Telegram определить медиа.
-                kwargs["force_document"] = False
-
-                await message.client.send_file(
-                    message.chat_id,
-                    str(file),
+                await self._send_file(
+                    message,
+                    file,
+                    file_type,
                     caption=reply.text or None,
-                    **kwargs
                 )
 
                 await message.delete()
 
             except asyncio.CancelledError:
-
                 try:
                     await message.edit(
                         self.strings["cancel"]
@@ -615,12 +541,11 @@ class UniversalDownloadMod(loader.Module):
                 except Exception:
                     pass
 
-            except Exception as e:
-
+            except Exception as exc:
                 try:
                     await message.edit(
                         self.strings["error"].format(
-                            str(e)[:1500]
+                            str(exc)[:1500]
                         )
                     )
                 except Exception:
@@ -632,10 +557,7 @@ class UniversalDownloadMod(loader.Module):
 
             return
 
-        # -------------------------
-        # No arguments
-        # -------------------------
-
+        # Нет аргументов
         if not args:
             await utils.answer(
                 message,
@@ -646,10 +568,6 @@ class UniversalDownloadMod(loader.Module):
             return
 
         url = args.split()[0].strip()
-
-        # -------------------------
-        # URL validation
-        # -------------------------
 
         if not url.startswith(
             ("http://", "https://")
@@ -662,12 +580,9 @@ class UniversalDownloadMod(loader.Module):
             self.task = None
             return
 
-        # -------------------------
-        # Download
-        # -------------------------
+        self.tmpdir = None
 
         try:
-
             await message.edit(
                 self.strings["start"]
             )
@@ -683,25 +598,15 @@ class UniversalDownloadMod(loader.Module):
                 self.strings["send"]
             )
 
-            kwargs = {
-                "force_document": False
-            }
-
-            if file_type == "video":
-                kwargs[
-                    "supports_streaming"
-                ] = True
-
-            await message.client.send_file(
-                message.chat_id,
-                str(file),
-                **kwargs
+            await self._send_file(
+                message,
+                file,
+                file_type
             )
 
             await message.delete()
 
         except asyncio.CancelledError:
-
             try:
                 await message.edit(
                     self.strings["cancel"]
@@ -709,26 +614,19 @@ class UniversalDownloadMod(loader.Module):
             except Exception:
                 pass
 
-        except Exception as e:
-
+        except Exception as exc:
             try:
                 await message.edit(
                     self.strings["error"].format(
-                        str(e)[:1500]
+                        str(exc)[:1500]
                     )
                 )
             except Exception:
                 pass
 
         finally:
-
             await self._cleanup()
-
             self.task = None
-
-    # =========================
-    # CANCEL
-    # =========================
 
     @loader.command()
     async def dlcancel(self, message):
