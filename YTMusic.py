@@ -103,18 +103,28 @@ class YTMusicMod(loader.Module):
                 self.yt = None
             return
 
+             async def _init_ytmusic(self):
+        auth_data = self.config["cookies"]
+        
+        if not auth_data or not auth_data.strip():
+            try:
+                self.yt = YTMusic()
+                logger.info("YTMusic инициализирован в анонимном режиме")
+            except Exception as e:
+                logger.error(f"Ошибка анонимной инициализации: {e}")
+                self.yt = None
+            return
+
         auth_data = auth_data.strip()
 
-        # Если передан путь к файлу (например, oauth.json)
         if os.path.exists(auth_data) or auth_data.endswith(".json"):
             try:
                 self.yt = YTMusic(auth_data)
-                logger.info("YTMusic успешно инициализирован через файл (OAuth/Headers)")
+                logger.info("YTMusic успешно инициализирован через файл")
                 return
             except Exception as e:
                 logger.error(f"Не удалось инициализировать через файл: {e}")
 
-        # Иначе пробуем распарсить как строку кук
         path = None
         try:
             import json
@@ -125,6 +135,7 @@ class YTMusicMod(loader.Module):
                 "Content-Type": "application/json",
                 "X-Goog-AuthUser": "0",
                 "x-origin": "https://music.youtube.com",
+                "Authorization": "SAPISIDHASH 1_1_1",
                 "Cookie": auth_data
             }
             
@@ -141,15 +152,7 @@ class YTMusicMod(loader.Module):
         finally:
             if path and os.path.exists(path):
                 os.remove(path)
-
-    def _start_status_loop(self):
-        if self._status_task and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(self._status_loop())
-
-    async def _status_loop(self):
-        while self.config["auto_status"]:
-            try:
+   try:
                 track = await self._get_current_track()
                 if track and track != self.last_track:
                     self.last_track = track
