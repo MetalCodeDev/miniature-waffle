@@ -64,7 +64,7 @@ class YTMusicMod(loader.Module):
             loader.ConfigValue(
                 "status_template",
                 "🎧 {title} — {artist}",
-                lambda: "Шаблон статуса (макс \~70 символов)",
+                lambda: "Шаблон статуса (макс ~70 символов)",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
@@ -100,8 +100,15 @@ class YTMusicMod(loader.Module):
             return
 
         try:
-            # ytmusicapi принимает либо путь к файлу cookies, либо headers
-            self.yt = YTMusic(cookies)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Content-Type": "application/json",
+                "X-Goog-AuthUser": "0",
+                "Cookie": cookies
+            }
+            self.yt = YTMusic(headers)
             logger.info("YTMusic успешно инициализирован")
         except Exception as e:
             logger.error(f"Ошибка инициализации YTMusic: {e}")
@@ -197,7 +204,6 @@ class YTMusicMod(loader.Module):
             if "youtube.com" in args or "youtu.be" in args or "music.youtube.com" in args:
                 url = args
             else:
-                # Поиск
                 try:
                     results = await utils.run_sync(self.yt.search, args, filter="songs")
                     if not results:
@@ -223,6 +229,20 @@ class YTMusicMod(loader.Module):
             await utils.answer(msg, self.strings["error"].format(error=str(e)))
 
     async def _download_audio(self, url: str) -> str:
+        cookie_file = None
+        cookies_str = self.config["cookies"]
+        
+        # Создаем временный Netscape файл кук для yt-dlp, если строка задана
+        if cookies_str:
+            fd, cookie_file = tempfile.mkstemp(suffix=".txt")
+            os.close(fd)
+            with open(cookie_file, "w", encoding="utf-8") as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                for cookie in cookies_str.split(";"):
+                    if "=" in cookie:
+                        name, value = cookie.strip().split("=", 1)
+                        f.write(f".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}\n")
+
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": tempfile.gettempdir() + "/%(title)s.%(ext)s",
@@ -235,11 +255,18 @@ class YTMusicMod(loader.Module):
             "no_warnings": True,
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await utils.run_sync(ydl.extract_info, url, download=True)
-            filename = ydl.prepare_filename(info)
-            base, _ = os.path.splitext(filename)
-            return base + f".{self.config['audio_format']}"
+        if cookie_file:
+            ydl_opts["cookiefile"] = cookie_file
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = await utils.run_sync(ydl.extract_info, url, download=True)
+                filename = ydl.prepare_filename(info)
+                base, _ = os.path.splitext(filename)
+                return base + f".{self.config['audio_format']}"
+        finally:
+            if cookie_file and os.path.exists(cookie_file):
+                os.remove(cookie_file)
 
     async def ytscmd(self, message: Message):
         """Поиск по YouTube Music"""
