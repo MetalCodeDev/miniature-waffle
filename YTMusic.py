@@ -20,30 +20,27 @@ logger = logging.getLogger(__name__)
 
 @loader.tds
 class YTMusicMod(loader.Module):
-    """YouTube Music + Now Playing + Downloader"""
+    """YouTube Music + Now Playing + Downloader (Комбайн: Куки, OAuth или Анонимно)"""
 
     strings = {
         "name": "YTMusic",
-        "no_auth": "❌ Сначала настрой авторизацию через <code>.ytauth</code>",
         "now_playing": (
             "🎧 <b>{title}</b>\n"
             "👤 <b>{artist}</b>\n"
             "💿 {album}\n"
             "⏱ {duration}"
         ),
-        "not_playing": "Сейчас ничего не играет или история пуста",
+        "not_playing": "Сейчас ничего не играет или история пуста (или вы без авторизации)",
         "status_on": "✅ Авто-статус включён",
         "status_off": "❌ Авто-статус выключен",
         "downloading": "📥 Скачиваю <b>{title}</b>...",
         "downloaded": "✅ Готово",
         "search_results": "🔍 Результаты поиска:",
         "auth_help": (
-            "<b>Как получить куки:</b>\n\n"
-            "1. Открой <a href='https://music.youtube.com'>music.youtube.com</a> в браузере\n"
-            "2. Нажми F12 → Application → Cookies → https://music.youtube.com\n"
-            "3. Скопируй значения важных кук (особенно SAPISID, __Secure-3PAPISID и др.)\n"
-            "4. Вставь их в конфиг: <code>.cfg YTMusic cookies</code>\n\n"
-            "Или используй oauth через ytmusicapi (более стабильно)."
+            "<b>Режимы работы YTMusic:</b>\n\n"
+            "1. <b>Куки браузера:</b> вставь строку кук в <code>.cfg YTMusic cookies</code>\n"
+            "2. <b>OAuth:</b> укажи путь к файлу <code>oauth.json</code> в тот же конфиг\n"
+            "3. <b>Анонимно:</b> оставь конфиг пустым (доступны поиск и скачивание, но нет истории и статуса)"
         ),
         "error": "❌ Ошибка: {error}",
     }
@@ -52,13 +49,13 @@ class YTMusicMod(loader.Module):
         self.config = loader.ModuleConfig(
             loader.ConfigValue(
                 "cookies",
-                doc="Куки от music.youtube.com (строка или путь к файлу)",
+                doc="Строка кук, путь к oauth.json или пусто для анонимного режима",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "auto_status",
                 False,
-                lambda: "Автоматически обновлять био",
+                lambda: "Автоматически обновлять био (требует авторизацию)",
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
@@ -94,25 +91,56 @@ class YTMusicMod(loader.Module):
             self._start_status_loop()
 
     async def _init_ytmusic(self):
-        cookies = self.config["cookies"]
-        if not cookies:
-            self.yt = None
+        auth_data = self.config["cookies"]
+        
+        # Если конфиг пустой — инициализируем анонимный YTMusic
+        if not auth_data or not auth_data.strip():
+            try:
+                self.yt = YTMusic()
+                logger.info("YTMusic инициализирован в анонимном режиме")
+            except Exception as e:
+                logger.error(f"Ошибка анонимной инициализации YTMusic: {e}")
+                self.yt = None
             return
 
+        auth_data = auth_data.strip()
+
+        # Если передан путь к файлу (например, oauth.json)
+        if os.path.exists(auth_data) or auth_data.endswith(".json"):
+            try:
+                self.yt = YTMusic(auth_data)
+                logger.info("YTMusic успешно инициализирован через файл (OAuth/Headers)")
+                return
+            except Exception as e:
+                logger.error(f"Не удалось инициализировать через файл: {e}")
+
+        # Иначе пробуем распарсить как строку кук
+        path = None
         try:
+            import json
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept": "*/*",
                 "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Content-Type": "application/json",
                 "X-Goog-AuthUser": "0",
-                "Cookie": cookies
+                "x-origin": "https://music.youtube.com",
+                "Cookie": auth_data
             }
-            self.yt = YTMusic(headers)
-            logger.info("YTMusic успешно инициализирован")
+            
+            fd, path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(headers, f)
+
+            self.yt = YTMusic(path)
+            logger.info("YTMusic успешно инициализирован через строку кук")
         except Exception as e:
-            logger.error(f"Ошибка инициализации YTMusic: {e}")
+            logger.error(f"Ошибка инициализации YTMusic по кукам: {e}")
             self.yt = None
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
 
     def _start_status_loop(self):
         if self._status_task and not self._status_task.done():
@@ -128,7 +156,7 @@ class YTMusicMod(loader.Module):
                     status = self.config["status_template"].format(**track)[:70]
                     await self._client(functions.account.UpdateProfileRequest(about=status))
             except Exception as e:
-                logger.warning(f"Ошибка в status loop: {e}")
+                logger.warning(f"Ошибка в status loop (возможно, нужен аккаунт): {e}")
 
             await asyncio.sleep(self.config["check_interval"])
 
@@ -153,7 +181,7 @@ class YTMusicMod(loader.Module):
                 "url": f"https://music.youtube.com/watch?v={item.get('videoId')}" if item.get("videoId") else "",
             }
         except Exception as e:
-            logger.error(f"Ошибка получения истории: {e}")
+            logger.error(f"Ошибка получения истории (нужна авторизация): {e}")
             return None
 
     async def npcmd(self, message: Message):
@@ -172,7 +200,7 @@ class YTMusicMod(loader.Module):
             return await utils.answer(message, self.strings["status_off"])
 
         if not self.yt:
-            return await utils.answer(message, self.strings["no_auth"])
+            return await utils.answer(message, "❌ Модуль не инициализирован")
 
         track = await self._get_current_track()
         if not track:
@@ -182,13 +210,13 @@ class YTMusicMod(loader.Module):
         await utils.answer(message, text)
 
     async def ytauthcmd(self, message: Message):
-        """Инструкция по авторизации"""
+        """Информация о режимах работы"""
         await utils.answer(message, self.strings["auth_help"])
 
     async def ytacmd(self, message: Message):
         """Скачать аудио (текущий трек или по запросу/ссылке)"""
-        if not self.yt and not utils.get_args_raw(message):
-            return await utils.answer(message, self.strings["no_auth"])
+        if not self.yt:
+            return await utils.answer(message, "❌ Модуль не инициализирован")
 
         args = utils.get_args_raw(message)
         url = None
@@ -197,7 +225,7 @@ class YTMusicMod(loader.Module):
         if not args:
             track = await self._get_current_track()
             if not track or not track.get("videoId"):
-                return await utils.answer(message, self.strings["not_playing"])
+                return await utils.answer(message, "❌ Укажи поисковый запрос или включи трек в аккаунте")
             url = track["url"]
             title = track["title"]
         else:
@@ -230,15 +258,15 @@ class YTMusicMod(loader.Module):
 
     async def _download_audio(self, url: str) -> str:
         cookie_file = None
-        cookies_str = self.config["cookies"]
+        auth_data = self.config["cookies"]
         
-        # Создаем временный Netscape файл кук для yt-dlp, если строка задана
-        if cookies_str:
+        # Если в конфиге строка кук — формируем временный файл для yt-dlp
+        if auth_data and "=" in auth_data and not auth_data.endswith(".json") and not os.path.exists(auth_data):
             fd, cookie_file = tempfile.mkstemp(suffix=".txt")
             os.close(fd)
             with open(cookie_file, "w", encoding="utf-8") as f:
                 f.write("# Netscape HTTP Cookie File\n")
-                for cookie in cookies_str.split(";"):
+                for cookie in auth_data.split(";"):
                     if "=" in cookie:
                         name, value = cookie.strip().split("=", 1)
                         f.write(f".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}\n")
@@ -275,7 +303,7 @@ class YTMusicMod(loader.Module):
             return await utils.answer(message, "Укажи поисковый запрос")
 
         if not self.yt:
-            return await utils.answer(message, self.strings["no_auth"])
+            return await utils.answer(message, "❌ Модуль не инициализирован")
 
         try:
             results = await utils.run_sync(self.yt.search, args, filter="songs")
