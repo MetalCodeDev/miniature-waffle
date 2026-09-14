@@ -3,8 +3,10 @@
 # requires: ytmusicapi yt-dlp
 
 import asyncio
+import json
 import logging
 import os
+import re
 import tempfile
 from typing import Optional
 
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @loader.tds
 class YTMusicMod(loader.Module):
-    """YouTube Music + Now Playing + Downloader"""
+    """YouTube Music + Now Playing + Downloader + Lyrics"""
 
     strings = {
         "name": "YTMusic",
@@ -102,6 +104,7 @@ class YTMusicMod(loader.Module):
             return
 
         auth_data = auth_data.strip()
+        path = None
 
         try:
             headers = {
@@ -114,11 +117,19 @@ class YTMusicMod(loader.Module):
                 "Cookie": auth_data
             }
             
-            self.yt = YTMusic(headers)
-            logger.info("YTMusic успешно инициализирован через строку кук")
+            fd, path = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(headers, f)
+
+            self.yt = YTMusic(path)
+            logger.info("YTMusic успешно инициализирован через файл кук")
         except Exception as e:
             logger.error(f"Ошибка инициализации YTMusic: {e}")
             self.yt = None
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
 
     def _start_status_loop(self):
         if self._status_task and not self._status_task.done():
@@ -295,3 +306,53 @@ class YTMusicMod(loader.Module):
             await utils.answer(message, text)
         except Exception as e:
             await utils.answer(message, self.strings["error"].format(error=str(e)))
+
+    async def lyricscmd(self, message: Message):
+        """Получить текст текущего или найденного трека (.lyric [запрос/ссылка])"""
+        if not self.yt:
+            return await utils.answer(message, "❌ Модуль не инициализирован")
+
+        args = utils.get_args_raw(message)
+        videoId = None
+
+        if not args:
+            track = await self._get_current_track()
+            if not track or not track.get("videoId"):
+                return await utils.answer(message, "❌ Укажи поисковый запрос или включи трек в аккаунте")
+            videoId = track["videoId"]
+        else:
+            if "youtube.com" in args or "youtu.be" in args or "music.youtube.com" in args:
+                match = re.search(r"(?:v=|/v/|youtu\.be/|embed/)([a-zA-Z0-9_-]{11})", args)
+                if match:
+                    videoId = match.group(1)
+            else:
+                try:
+                    results = await utils.run_sync(self.yt.search, args, filter="songs")
+                    if not results:
+                        return await utils.answer(message, "Ничего не найдено")
+                    videoId = results[0]['videoId']
+                except Exception as e:
+                    return await utils.answer(message, self.strings["error"].format(error=str(e)))
+
+        if not videoId:
+            return await utils.answer(message, "❌ Не удалось определить трек")
+
+        msg = await utils.answer(message, "🔍 Ищу текст песни...")
+
+        try:
+            watch = await utils.run_sync(self.yt.get_watch_playlist, videoId=videoId)
+            lyrics_id = watch.get("lyrics")
+            if not lyrics_id:
+                return await utils.answer(msg, "❌ Текст для этого трека недоступен в YouTube Music")
+
+            lyrics_data = await utils.run_sync(self.yt.get_lyrics, lyrics_id)
+            lyrics_text = lyrics_data.get("lyrics")
+            if not lyrics_text:
+                return await utils.answer(msg, "❌ Текст песни оказался пустым")
+
+            if len(lyrics_text) > 4000:
+                lyrics_text = lyrics_text[:4000] + "\n\n... (текст обрезан из-за лимита Telegram)"
+
+            await utils.answer(msg, f"📝 <b>Текст песни:</b>\n\n{lyrics_text}")
+        except Exception as e:
+            await utils.answer(msg, self.strings["error"].format(error=str(e)))
